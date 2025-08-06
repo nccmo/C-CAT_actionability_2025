@@ -1,0 +1,111 @@
+---
+title: "NTRK_previous_studies"
+author: "Yuki Saito"
+date: "2024-12-29"
+output: html_document
+---
+
+- R markdown script to evaluate treatment response reported in published studies.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+library(scales)
+library(ggplot2)
+library(ggsci)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/NTRK/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/NTRK/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r read in input data}
+df <- read_tsv("../../data/ntrk_previous_studies.txt", col_names = c("Study", "Fusion", "BOR", "n")) %>%
+  mutate(BOR = factor(BOR, levels = c("PD", "SD", "PR", "CR")))
+```
+
+```{r analysis1}
+all_df <- df %>% 
+  group_by(Fusion, BOR) %>% 
+  summarize(n = sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Study = "All")
+
+df <- bind_rows(df, all_df)
+```
+
+```{r analysis2}
+summary_df <- df %>% 
+  mutate(BOR = if_else(BOR == "PD" | BOR == "SD", "Non-responding", "Respoinding")) %>%
+  group_by(Study, Fusion, BOR) %>%
+  summarize(n = sum(n)) %>%
+  ungroup()
+summary_df
+
+stat_nejm <- summary_df %>% 
+  filter(Study == "Drilon, NEJM, 2018") %>% 
+  pull(n) %>% 
+  matrix(ncol = 2) %>% 
+  fisher.test()
+
+stat_lacet_oncol <- summary_df %>% 
+  filter(Study == "Doebele, Lancet Oncol, 2020") %>% 
+  pull(n) %>% 
+  matrix(ncol = 2) %>% 
+  fisher.test()
+stat_all <- summary_df %>% 
+  filter(Study == "All") %>% 
+  pull(n) %>% 
+  matrix(ncol = 2) %>% 
+  fisher.test()
+
+stat_nejm
+stat_lacet_oncol
+stat_all
+```
+
+```{r figure}
+all_df %>% 
+  group_by(Fusion) %>% 
+  mutate(sum = sum(n),
+         freq = n/sum(n)) %>% 
+  ggplot() +
+  geom_bar(aes(x = Fusion, y = freq, fill = BOR), stat = "identity", color = "black") +
+  geom_text(aes(x = Fusion, y = 1.025, label = str_c("(", sum, ")"))) +
+  ysum +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +6
+  ylab("Fraction of samples") +
+  theme(axis.title.x = element_blank(),
+        strip.text = element_text(size = 10),
+        axis.text.x = element_text(size = 9)) +
+  labs(caption = str_c("Fisher's exact test for NEJM: p = ", format.pval(stat_nejm$p.value),
+                       "\nFisher's exact test for Lancet Oncol: p = ", format.pval(stat_lacet_oncol$p.value),
+                       "\nFisher's exact test for All: p = ", format.pval(stat_all$p.value)))
+ggsave("result/pdf/analysis/NTRK/previous_studies_response_rate_all_only.pdf", width = 10, height = 5)
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

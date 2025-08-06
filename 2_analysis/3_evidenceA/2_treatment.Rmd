@@ -1,0 +1,240 @@
+---
+title: "EvidenceA (approved) treatment"
+author: "Yuki Saito"
+date: "2024-04-18"
+output: html_document
+---
+
+- R markdown script to evaluate treatment in cases harboring level A (approved) alterations.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/evidence_A/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/evidence_A/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r function}
+get_last_non_empty <- function(x) {
+  non_empty_elements <- x[x != ""]
+  return(tail(non_empty_elements, 1))
+}
+```
+
+```{r read in data}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "")
+# read in evidence A treatment data
+evidenceA_treatment_data <- read_csv("result/table/evidence_A/Evidence_A_data_by_alteration_with_treatment_and_response.csv", na = "")
+evidenceA_treatment_count <- read_csv("result/table/analysis/evidence_A/Evidence_A(approved)_count.csv")
+# approved only
+evidenceA_approved_treatment_data <- evidenceA_treatment_data %>% 
+  filter(Highest_evidence_level2 == "Evidence_A(approved)")
+```
+
+```{r strict vs lenient}
+# PreEP
+strict_lenient_diff_df <- evidenceA_approved_treatment_data %>%
+  filter((is.na(PreEP_automatic_strict) & !is.na(PreEP_automatic_lenient)) |
+         (!is.na(PreEP_automatic_strict) & is.na(PreEP_automatic_lenient)) |
+         (PreEP_automatic_strict != PreEP_automatic_lenient)) %>% 
+  filter(!Evidence_A_class %in% c("dMMR_PanCan", "MSI_high_Endometrial", "MSI_high_PanCan", "TMB_high_PanCan")) 
+strict_lenient_diff_df
+strict_lenient_diff_df %>% 
+  count(Evidence_A_class, PreEP_automatic_strict, PreEP_automatic_lenient)
+
+# PostEP
+strict_lenient_diff_df <- evidenceA_approved_treatment_data %>%
+  filter((is.na(PostEP_automatic_strict) & !is.na(PostEP_automatic_lenient)) |
+         (!is.na(PostEP_automatic_strict) & is.na(PostEP_automatic_lenient)) |
+         (PostEP_automatic_strict != PostEP_automatic_lenient)) %>% 
+  filter(!Evidence_A_class %in% c("dMMR_PanCan", "MSI_high_Endometrial", "MSI_high_PanCan", "TMB_high_PanCan"))
+strict_lenient_diff_df
+strict_lenient_diff_df %>% 
+  count(Evidence_A_class, PostEP_automatic_strict, PostEP_automatic_lenient)
+```
+
+```{r number}
+evidenceA_approved_treatment_data %>% 
+  filter(Pre_regimen_info_existence == "Yes" &
+           Post_regimen_info_existence == "Yes") %>% 
+  count(Tumor_Sample_Barcode) %>% 
+  nrow()
+```
+
+```{r overview}
+evidenceA_approved_treatment_filtered_data <- evidenceA_approved_treatment_data %>%
+  filter(Pre_regimen_info_existence == "Yes" &
+           Post_regimen_info_existence == "Yes") %>%
+  mutate(PreEP_automatic_strict = if_else(is.na(PreEP_automatic_strict), "No", "Yes"),
+         PostEP_automatic_strict = if_else(is.na(PostEP_automatic_strict), "No", "Yes")) %>%
+  mutate(PostCGP_Treatment = case_when(PreEP_automatic_strict == "Yes" & PostEP_automatic_strict == "Yes" ~ "Both_administered",
+                                       PreEP_automatic_strict == "Yes" & PostEP_automatic_strict == "No" ~ "Previously_administered",
+                                       PreEP_automatic_strict == "No" & PostEP_automatic_strict == "Yes" ~ "Newly_administered",
+                                       TRUE ~ "Unadministered"))
+
+evidenceA_approved_treatment_filtered_data %>% 
+  count(Tumor_Sample_Barcode) %>% 
+  filter(n >= 2)
+
+# check
+evidenceA_approved_treatment_filtered_data %>% 
+  count(Evidence_A_class, Tumor_Sample_Barcode) %>% 
+  filter(n >= 2)
+  
+evidenceA_approved_treatment_filtered_data2 <- evidenceA_approved_treatment_filtered_data %>% 
+  select(Tumor_Sample_Barcode, Oncotree_CODE_Final_wide, Evidence_A_class, PostCGP_Treatment) %>%
+  unique()
+```
+
+```{r by individual pan-cancer}
+# modified the script to count by individuals, not by alterations
+priority_order <- c("Newly_administered", "Both_administered", "Previously_administered", "Unadministered")
+evidenceA_approved_treatment_filtered_data_by_individual <- evidenceA_approved_treatment_filtered_data2 %>%
+  group_by(Tumor_Sample_Barcode, Oncotree_CODE_Final_wide) %>%
+  summarise(PostCGP_Treatment = first(PostCGP_Treatment[order(match(PostCGP_Treatment, priority_order))])) %>%
+  ungroup()
+
+summary_df <- evidenceA_approved_treatment_filtered_data_by_individual %>%
+  count(PostCGP_Treatment) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  arrange(priority_order)
+print(summary_df)
+summary_df$PostCGP_Treatment <- factor(summary_df$PostCGP_Treatment, 
+                                       levels = c("Unadministered", "Previously_administered", "Both_administered", "Newly_administered"))
+
+ggplot(summary_df) +
+  geom_bar(aes(x = "", y = freq, fill = PostCGP_Treatment), color = "black", stat = "identity") +
+  geom_text(aes(x = "", y = freq, label = scales::percent(freq, accuracy = 0.01)), position = position_stack(vjust = 0.5)) +
+  scale_fill_manual(values = c("Unadministered" = "grey", 
+                               "Newly_administered" = "#ff8093", 
+                               "Both_administered" = "#5584b2",
+                               "Previously_administered" = "#55b2b2")) +
+  coord_polar("y") +
+  theme_void() +
+  guides(fill = guide_legend(reverse = TRUE,
+                             title = "Targeted therapy administration"))
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_treatment_summary.pdf", width = 5, height = 5)
+
+summary_df %>% 
+  write_excel_csv("result/table/analysis/evidence_A/Evidence_A(approved)_treatment_summary.csv")
+```
+
+```{r by alteration}
+# check
+tmp <- evidenceA_approved_treatment_filtered_data2 %>% 
+  count(Evidence_A_class, Tumor_Sample_Barcode) %>% 
+  filter(n >= 2) %>% 
+  nrow()
+if (tmp > 0){
+  stop("Multiple evidence A alterations within same evidence A (approved) class in individual sample")
+}
+
+df_by_alteration <- evidenceA_approved_treatment_filtered_data2 %>% 
+  group_by(Evidence_A_class) %>%
+  count(PostCGP_Treatment) %>% 
+  ungroup() %>% 
+  complete(Evidence_A_class, PostCGP_Treatment, fill = list(n = 0)) %>%
+  group_by(Evidence_A_class) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>%
+  mutate(PostCGP_Treatment = factor(PostCGP_Treatment, levels = c("Unadministered", "Previously_administered", "Both_administered", "Newly_administered"))) %>% 
+  mutate(Cancer_type = apply(str_split(Evidence_A_class, "_", simplify = TRUE), 1, get_last_non_empty)) %>% 
+  ungroup() %>% 
+  mutate(Evidence_A_class = factor(Evidence_A_class, levels = rev(unique(evidenceA_treatment_count$Evidence_A_class)))) %>% 
+  arrange(Evidence_A_class)
+
+# save table
+df_by_alteration %>%
+  write_excel_csv("result/table/analysis/evidence_A/Evidence_A(approved)_treatment_by_alteration.csv")
+df_by_alteration
+
+# Merge the reordered levels with the original data
+df_by_alteration2 <- df_by_alteration %>% 
+  filter(sum >= 10) %>% 
+  filter(PostCGP_Treatment != "Unadministered")
+df_by_alteration2
+
+# Create the plot
+fig <- ggplot(df_by_alteration2) +
+  geom_bar(aes(x = Evidence_A_class, y = freq, fill = PostCGP_Treatment), color = "black", stat = "identity") +
+  geom_text(aes(x = Evidence_A_class, y = 1.025, label = paste0("(", sum, ")")), size = 2.5) +
+  scale_fill_manual(values = c("Unadministered" = "grey", 
+                               "Newly_administered" = "#ff8093", 
+                               "Both_administered" = "#5584b2",
+                               "Previously_administered" = "#55b2b2")) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 1.1)) +
+  theme(axis.title.y = element_blank()) +
+  theme(axis.text.y = element_text(size = 8)) +
+  ylab("Fraction of samples")
+
+fig
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_treatment_by_alteration.pdf", width = 5, height = 6)
+fig + theme(legend.position = "none")
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_treatment_by_alteration_no_legend.pdf", width = 5, height = 6)
+```
+
+```{r count figure}
+# check
+evidenceA_treatment_count %>%
+  filter(n >= 20) %>% 
+  filter(!Evidence_A_class %in% df_by_alteration2$Evidence_A_class)
+
+fig <- evidenceA_treatment_count %>%
+  mutate(class = if_else(Evidence_A_class == "dMMR_PanCan", "mutation", class)) %>% 
+  filter(Evidence_A_class %in% df_by_alteration2$Evidence_A_class) %>%
+  ggplot() +
+  geom_bar(aes(x = reorder(Evidence_A_class, n), y = n, fill = class), color = "black", stat = "identity") +
+  theme(axis.title.y = element_blank()) +
+  theme(axis.text.y = element_text(size = 8)) +
+  ylab("Number of cases") +
+  scale_y_continuous(expand = c(0,0)) +
+  coord_flip(ylim = c(0, 1000))
+print(fig)
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_count_colored_by_class_selected.pdf", width = 5, height = 6)
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_count_colored_by_class_selected_no_legend.pdf", width = 5, height = 6, 
+       fig + theme(legend.position = "none"))
+
+fig <- evidenceA_treatment_count %>%
+  mutate(class = if_else(Evidence_A_class == "dMMR_PanCan", "mutation", class)) %>% 
+  filter(Evidence_A_class %in% df_by_alteration2$Evidence_A_class) %>%
+  ggplot() +
+  geom_bar(aes(x = reorder(Evidence_A_class, n), y = n, fill = class), color = "black", stat = "identity") +
+  theme(axis.title.y = element_blank()) +
+  theme(axis.text.y = element_text(size = 8)) +
+  ylab("Number of cases") +
+  scale_y_continuous(
+    expand = c(0, 0),
+    limits = c(0, 2500),
+    breaks = seq(0, 2500, by = 250)
+  ) +
+  coord_flip()
+fig
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_count_colored_by_class_selected_no_legend2.pdf", width = 5, height = 6, 
+       fig + theme(legend.position = "none"))
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

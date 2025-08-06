@@ -1,0 +1,257 @@
+---
+title: "TMBH prognosis by MSI"
+author: "Yuki Saito"
+date: "2025-01-04"
+output: html_document
+---
+
+- R markdown script to evaluate prognosis by MSI.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(ggsurvfit)
+library(gtsummary)
+library(survival)
+library(survminer)
+library(scales)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/survival.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r read in merged data, warning=FALSE, message=FALSE}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "")
+merged_data
+```
+
+```{r selection of samples}
+merged_data2 <- merged_data %>%
+  filter(!is.na(TMB_score_F1)) %>% # exclusion of samples in which TMB cannot be determined
+  filter(!MSI_F1 %in% c("cannot be determined", "equivocal")) %>% # exclusion of samples in which MSI cannot be determined or equivocal
+  filter(TMB_EvidenceA == "TMB_high" | TMB_score_F1 < 10) %>%
+  mutate(TMB_status = if_else(TMB_score_F1 >= 10, "TMB-High", "TMB-Low")) %>% 
+  mutate(class = case_when(TMB_score_F1 >= 20 ~ "TMB>=20",
+                           TMB_score_F1 >= 10 ~ "20>TMB>=10",
+                           TRUE ~ "TMB-Low")) %>% 
+  mutate(class2 = case_when(TMB_status == "TMB-Low" ~ "TMB-Low",
+                            MSI_F1 == "high" ~ "MSI-H",
+                            MSI_F1 == "stable" ~ "MSS"
+                            )) %>% 
+  mutate(Age_category = case_when(Age < 65 ~ "<65",
+                                  Age >= 65 & Age < 75 ~ "65-74",
+                                  Age >= 75 ~ ">=75")) %>%
+  mutate(Age_category = factor(Age_category, levels = c("<65", "65-74", ">=75"))) %>% 
+  mutate(Sex_name = if_else(Sex == 9, NA_character_, Sex_name))
+
+nrow(merged_data2)
+nrow(merged_data) - nrow(merged_data2)
+```
+
+```{r exclusion of samples receiving ICI before CGP}
+merged_data3 <- merged_data2 %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(is.na(PreEP_ICI))
+
+merged_data3 %>% 
+  count(TMB_status, class, MSI_F1)
+```
+
+# 1, MSI-H vs MSS
+```{r pan-cancer MSI-H vs MSS}
+TMBH_data3 <- merged_data3 %>% 
+  filter(TMB_status == "TMB-High") %>% 
+  mutate(MSI_F1 = factor(MSI_F1, levels = c("stable", "high"))) %>% 
+  mutate(class = factor(class, levels = c("20>TMB>=10", "TMB>=20")))
+
+count <- survdiff(Surv(OS_time_from_CGP, OS)~ MSI_F1, data = TMBH_data3) 
+print(count)
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ MSI_F1 + Sex_name + Age_category, data = TMBH_data3))
+print(stat)
+stat_df <- tibble(Oncotree_CODE_Final_wide = "PanCan",
+                  MSS_num = count$n[[1]],
+                  MSIH_num = count$n[[2]],
+                  hazard_ratio = stat$conf.int[1,1],
+                  lower95 = stat$conf.int[1,3],
+                  higher95 = stat$conf.int[1,4],
+                  wald_p = stat$coefficients[1,5])
+
+ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ MSI_F1, data = TMBH_data3), size = 1.5) +
+  #add_censor_mark(size = 0.5) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 2),
+                  ylim = c(0, 1)) +
+  labs(x = "Years",
+       y = "Overall survival") +
+  ggtitle("PanCan") + 
+  scale_color_manual(
+    name = "MSI in TMB-H",
+    values = c("darkred", "tomato")
+    ) +
+  cowplot::theme_cowplot() +
+  labs(caption = "Excluding ICI-treated cases")
+ggsave("result/pdf/analysis/TMBH/TMBH_by_MSI_prognosis_pancan.pdf")
+```
+
+```{r cancer type MSI-H vs MSS}
+order_df <- read_xlsx("ref/Oncotree_CODE_order.xlsx")
+
+plot_list <- list()
+for (tmp_cancer_type in order_df$Oncotree_CODE_Final_wide){
+  tmp_merged_data <- TMBH_data3 %>% 
+    filter(Oncotree_CODE_Final_wide == tmp_cancer_type) %>% 
+    filter(!is.na(OS))
+  
+  if (nrow(tmp_merged_data) < 20){
+    next()
+  }
+  if (tmp_merged_data %>% count(MSI_F1) %>% nrow() == 1){
+    next()
+  }
+  
+  count <- survdiff(Surv(OS_time_from_CGP, OS)~ MSI_F1, data = tmp_merged_data) 
+  print(count)
+  if (tmp_merged_data %>% count(Sex_name) %>% nrow() == 1){
+    stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ MSI_F1 + Age_category, data = tmp_merged_data))
+  } else{
+    stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ MSI_F1 + Sex_name + Age_category, data = tmp_merged_data))
+  }
+  print(stat)
+  
+  stat_df <- bind_rows(stat_df,
+                       tibble(Oncotree_CODE_Final_wide = tmp_cancer_type,
+                              MSS_num = count$n[[1]],
+                              MSIH_num = count$n[[2]],
+                              hazard_ratio = stat$conf.int[1,1],
+                              lower95 = stat$conf.int[1,3],
+                              higher95 = stat$conf.int[1,4],
+                              wald_p = stat$coefficients[1,5]))
+  
+  fig <- ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ MSI_F1, data = tmp_merged_data), size = 1.5) +
+    #add_censor_mark(size = 0.5) +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    coord_cartesian(xlim = c(0, 2),
+                    ylim = c(0, 1)) +
+    labs(x = "Years",
+         y = "Overall survival") +
+    ggtitle(tmp_cancer_type) + 
+    scale_color_manual(
+      name = "MSI in TMB-H",
+      values = c("darkred", "tomato")
+    ) +
+    cowplot::theme_cowplot() +
+    labs(caption = "Excluding ICI-treated cases")
+  print(fig)
+  
+  plot_list[[tmp_cancer_type]] <- fig
+}
+
+pdf("result/pdf/analysis/TMBH/TMBH_by_MSI_prognosis_cancer_type.pdf")
+plot_list
+dev.off()
+```
+
+```{r final MSI-H vs MSS}
+stat_df %>%
+ write_excel_csv("result/table/analysis/TMBH/TMBH_by_MSI_prognosis_summary_multivariate.csv")
+
+stat_df %>%
+  mutate(sig = if_else(wald_p < 0.05, "p < 0.05", "p >= 0.05")) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = c(order_df$Oncotree_CODE_Final_wide, "PanCan"))) %>% 
+  ggplot(aes(x = Oncotree_CODE_Final_wide, y = log2(hazard_ratio))) +
+  geom_point(aes(color = sig), size = 3) +  # Red dot for hazard ratio
+  geom_text(aes(y = 3.35, label = str_c("(", MSS_num, ")")), size = 3) +
+  geom_text(aes(y = -3.35, label = str_c("(", MSIH_num, ")")), size = 3) +
+  geom_errorbar(aes(ymin = log2(lower95), ymax = log2(higher95), color = sig), color = "black", width = 0.2) +  # Error bars
+  geom_hline(yintercept = 0, linetype = "dashed") +  # Add a horizontal line at 1
+  labs(x = "Cancer Type", y = "log2(Hazard Ratio)") +
+  theme_minimal() +
+  ylim(-3.5, 3.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title.x = element_blank()) +
+  scale_color_manual(values = c("p < 0.05" = "red", 
+                                "p >= 0.05" = "black")) +
+  ggtitle("MSI-H vs MSS") +
+  theme(legend.position = "none") +
+  labs(caption = "Excluding ICI-treated cases")
+ggsave("result/pdf/analysis/TMBH/TMBH_by_MSI_prognosis_summary_multivariate.pdf", width = 15, height = 5)
+```
+
+# 2, Multivariate analysis
+```{r pancancer MSI and TMB burden}
+count <- survdiff(Surv(OS_time_from_CGP, OS)~ class + MSI_F1, data = TMBH_data3) 
+print(count)
+
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ Sex_name + Age_category + class + MSI_F1, data = TMBH_data3))
+print(stat)
+
+ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ class + MSI_F1, data = TMBH_data3), size = 1.5) +
+  #add_censor_mark(size = 0.5) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 2),
+                  ylim = c(0, 1)) +
+  labs(x = "Years",
+       y = "Overall survival") +
+  ggtitle("PanCan (TMB-H)") + 
+  cowplot::theme_cowplot() +
+  labs(caption = "Excluding ICI-treated cases in TMB-H") +
+  scale_color_manual(
+    name = "MSI status & TMB",
+    values = c("#3C5488FF", "#4DBBD5FF", "#E18727FF", "#E64B35FF"))
+ggsave("result/pdf/analysis/TMBH/TMBH_by_MSI_and_burden_prognosis_pancan.pdf")
+```
+
+```{r prognosis}
+TMBH_data3 <- TMBH_data3 %>%
+  mutate(TMB_MSI_class = str_c(class, "_", MSI_F1)) %>% 
+  mutate(TMB_MSI_class  = factor(TMB_MSI_class , levels = c("20>TMB>=10_stable", "20>TMB>=10_high", "TMB>=20_stable", "TMB>=20_high")))
+count <- survdiff(Surv(OS_time_from_CGP, OS)~ TMB_MSI_class, data = TMBH_data3)
+print(count)
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ Sex_name + Age_category + TMB_MSI_class, data = TMBH_data3)) 
+print(stat)
+
+TMBH_data3 <- TMBH_data3 %>%
+  mutate(TMB_MSI_class  = factor(TMB_MSI_class , levels = c("20>TMB>=10_high", "TMB>=20_stable", "TMB>=20_high", "20>TMB>=10_stable")))
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ Sex_name + Age_category + TMB_MSI_class, data = TMBH_data3)) 
+print(stat)
+
+TMBH_data3 <- TMBH_data3 %>%
+  mutate(TMB_MSI_class  = factor(TMB_MSI_class , levels = c("TMB>=20_stable", "TMB>=20_high", "20>TMB>=10_stable", "20>TMB>=10_high")))
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ Sex_name + Age_category + TMB_MSI_class, data = TMBH_data3)) 
+print(stat)
+```
+
+```{r forest plot}
+TMBH_data4 <- TMBH_data3 %>% 
+  filter(!is.na(OS)) %>% 
+  mutate(Sex_name = factor(Sex_name, levels = c("Woman", "Man")))
+
+coxph(Surv(OS_time_from_CGP, OS)~ Sex_name + Age_category + MSI_F1 + class, data = as.data.frame(TMBH_data3))
+ggforest(coxph(Surv(OS_time_from_CGP, OS)~ Sex_name + Age_category + MSI_F1 + class, data = as.data.frame(TMBH_data3)))
+
+coxph(Surv(OS_time_from_CGP, OS)~ Sex_name + Age_category + MSI_F1 + class, data = as.data.frame(TMBH_data4))
+ggforest(coxph(Surv(OS_time_from_CGP, OS)~ Sex_name + Age_category + MSI_F1 + class, data = as.data.frame(TMBH_data4)))
+ggsave("result/pdf/analysis/TMBH/TMBH_by_MSI_and_burden_multivariate.pdf")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

@@ -1,0 +1,278 @@
+---
+title: "Actionable_alterations"
+author: "Yuki Saito"
+date: "2024-03-12"
+output: html_document
+---
+
+- R markdown script to evaluate actionable alterations.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+library(scales)
+library(ggplot2)
+library(ggsci)
+library(scales)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/treatment_overview/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/treatment_overview/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r read data}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "") 
+```
+
+```{r function}
+cocran_armitage_trend_test_manual <- function(success_counts, trial_counts) {
+  # Calculate proportions
+  proportions <- success_counts / trial_counts
+
+  # Calculate the overall proportion
+  total_success <- sum(success_counts)
+  total_trials <- sum(trial_counts)
+  overall_proportion <- total_success / total_trials
+
+  # Calculate the weights
+  weights <- 1:length(success_counts)
+
+  # Calculate numerator and denominator for Z-statistic
+  numerator <- sum(weights * (proportions - overall_proportion) * trial_counts)
+  denominator <- sqrt(sum(weights^2 * proportions * (1 - proportions) * trial_counts))
+
+  # Calculate Z-statistic
+  z_statistic <- numerator / denominator
+
+  # Calculate p-value (two-sided)
+  p_value <- 2 * (1 - pnorm(abs(z_statistic)))
+
+  # Return results as a named vector
+  return(c(Z_statistic = z_statistic, P_value = p_value))
+}
+```
+
+```{r basic information}
+print("Number of samples")
+nrow(merged_data)
+
+print("Number of samples in each cancer type")
+merged_data %>% 
+  count(Oncotree_CODE_Final_wide) %>% 
+  arrange(-n) %>% 
+  head(10)
+```
+
+```{r evidence level in all}
+print("Count by the highest evidence")
+merged_data %>% 
+  count(Highest_evidence_level)
+merged_data %>% 
+  count(Highest_evidence_level2)
+
+print("Number of samples with Evidence A or B alterations")
+tmp <- merged_data %>% 
+  filter(Highest_evidence_level %in% c("Evidence_A", "Evidence_B")) %>% 
+  nrow()
+print(tmp)
+print(100*tmp/nrow(merged_data))
+```
+
+```{r overall figure}
+merged_data$Highest_evidence_level2 <- factor(merged_data$Highest_evidence_level2, 
+                                              levels = c("No_evidence",
+                                                         "Evidence_E",
+                                                         "Evidence_D",
+                                                         "Evidence_C",
+                                                         "Evidence_B",
+                                                         "Evidence_A(unapproved)",
+                                                         "Evidence_A(approved)"))
+
+# Highest evidence level
+count_df <- merged_data %>% 
+  count(Highest_evidence_level2) %>%
+  mutate(sum = sum(n),
+         freq = n/sum) 
+print(count_df)
+count_df %>% 
+  write_csv("result/table/analysis/treatment_overview/highest_evidence_level_fraction_overall.csv")
+
+# Calculate cumulative positions for labels
+count_df <- count_df %>%
+  arrange(desc(Highest_evidence_level2)) %>%
+  mutate(y_position = cumsum(freq) - (freq / 2))
+
+ggplot(count_df) +
+  geom_bar(aes(x = "", y = freq, fill = Highest_evidence_level2), 
+           color = "black", stat = "identity", width = 1) +
+  geom_text(aes(x = "", y = y_position, 
+                label = paste0(scales::percent(freq, accuracy = 0.01))), 
+            size = 4) +
+  coord_polar("y") +
+  theme(axis.line = element_blank(),       # Remove axis lines
+        axis.text.x = element_blank(),     # Remove X-axis text
+        axis.text.y = element_blank(),     # Remove Y-axis text
+        axis.ticks = element_blank(),      # Remove axis ticks
+        axis.title.x = element_blank(),    # Remove X-axis title
+        axis.title.y = element_blank()) +  # Remove Y-axis title
+  ggtitle("Highest evidence level") +
+  scale_fill_manual(values = c("No_evidence" = "gray60",
+                               "Evidence_E" = "#F39B7FFF",
+                               "Evidence_D" = "#3C5488FF",
+                               "Evidence_C" = "#4DBBD5FF",
+                               "Evidence_B" = "#00A087FF",
+                               "Evidence_A(unapproved)" = "pink",
+                               "Evidence_A(approved)" = "#E64B35FF")) +
+  guides(fill = guide_legend(reverse = TRUE, title = "Highest evidence level"))
+ggsave("result/pdf/analysis/treatment_overview/highest_evidence_level_fraction_overall.pdf")
+```
+
+```{r by year figure}
+# Highest evidence level
+count_df_by_year <- merged_data %>% 
+  mutate(year = year(Registration_date)) %>%
+  mutate(year_category = case_when(year == 2019 | year == 2020 ~ "2019-2020",
+                                   year == 2021 | year == 2022 ~ "2021-2022",
+                                   year == 2023 | year == 2024 ~ "2023-2024",
+                                   TRUE ~ "")) %>%
+  group_by(year_category) %>% 
+  count(Highest_evidence_level2) %>%
+  mutate(sum = sum(n),
+         freq = n/sum)
+print(count_df_by_year)
+count_df_by_year %>% 
+  write_csv("result/table/analysis/treatment_overview/highest_evidence_level_fraction_by_year_category.csv")
+
+count_df_by_year %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(approved)",
+                                        "Evidence_A(unapproved)",
+                                        "Evidence_B",
+                                        "Evidence_C",
+                                        "Evidence_D")) %>% 
+  ggplot() +
+  geom_bar(aes(x = year_category, y = freq, fill = Highest_evidence_level2), color = "black", stat = "identity") +
+  geom_text(aes(x = year_category, y = 1.025, label =  paste0("(", comma(sum), ")")), size = 3) +
+  xlab("Year of CGP") +
+  ylab("Fraction of samples") +
+  ysum +
+  scale_fill_manual(values = c("No_evidence" = "gray60",
+                               "Evidence_E" = "#F39B7FFF",
+                               "Evidence_D" = "#3C5488FF",
+                               "Evidence_C" = "#4DBBD5FF",
+                               "Evidence_B" = "#00A087FF",
+                               "Evidence_A(unapproved)" = "pink",
+                               "Evidence_A(approved)" = "#E64B35FF")) +
+  guides(fill = guide_legend(reverse = TRUE,
+                             title = "Highest evidence level"))
+ggsave("result/pdf/analysis/treatment_overview/highest_evidence_level_fraction_by_year_category.pdf")
+
+# Cochran-Armitage trend test
+# evidence A
+print("Evidence A")
+evidencea_approved_df <- count_df_by_year %>% 
+  filter(Highest_evidence_level2 == "Evidence_A(approved)")
+evidencea_approved_df
+stat <- prop.trend.test(evidencea_approved_df$n, evidencea_approved_df$sum)
+stat
+stat$p.value
+cocran_armitage_trend_test_manual(evidencea_approved_df$n, evidencea_approved_df$sum)
+
+print("Evidence A (unapproved)")
+evidencea_unapproved_df <- count_df_by_year %>% 
+  filter(Highest_evidence_level2 == "Evidence_A(unapproved)")
+evidencea_unapproved_df
+stat <- prop.trend.test(evidencea_unapproved_df$n, evidencea_unapproved_df$sum)
+stat
+stat$p.value
+cocran_armitage_trend_test_manual(evidencea_unapproved_df$n, evidencea_unapproved_df$sum)
+
+# evidence B
+print("Evidence B")
+evidenceb_df <- count_df_by_year %>% 
+  filter(Highest_evidence_level2 == "Evidence_B")
+evidenceb_df
+stat <- prop.trend.test(evidenceb_df$n, evidenceb_df$sum)
+stat
+stat$p.value
+cocran_armitage_trend_test_manual(evidenceb_df$n, evidenceb_df$sum)
+
+# evidence C
+print("Evidence C")
+evidencec_df <- count_df_by_year %>% 
+  filter(Highest_evidence_level2 == "Evidence_C")
+evidencec_df
+stat <- prop.trend.test(evidencec_df$n, evidencec_df$sum)
+stat
+stat$p.value
+cocran_armitage_trend_test_manual(evidencec_df$n, evidencec_df$sum)
+
+# evidence D
+print("Evidence D")
+evidenced_df <- count_df_by_year %>% 
+  filter(Highest_evidence_level2 == "Evidence_D")
+evidenced_df
+stat <- prop.trend.test(evidenced_df$n, evidenced_df$sum)
+stat
+stat$p.value
+cocran_armitage_trend_test_manual(evidenced_df$n, evidenced_df$sum)
+```
+
+```{r by cancer type figure}
+count_df_by_cancertype <- merged_data %>% 
+  filter(Oncotree_CODE_Final_wide %in% wide_cancer_order) %>% 
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  count(Highest_evidence_level2) %>%
+  mutate(sum = sum(n),
+         freq = n/sum) %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = wide_cancer_order)) %>% 
+  arrange(Oncotree_CODE_Final_wide)
+print(count_df_by_cancertype)
+count_df_by_cancertype %>% 
+  write_csv("result/table/analysis/treatment_overview/highest_evidence_level_fraction_by_cancertype.csv")
+
+count_df_by_cancertype %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(approved)",
+                                        "Evidence_A(unapproved)",
+                                        "Evidence_B",
+                                        "Evidence_C",
+                                        "Evidence_D")) %>% 
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = freq, fill = Highest_evidence_level2), color = "black", stat = "identity") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 1.025, label =  paste0("(", comma(sum), ")")), size = 2) +
+  x90 +
+  ylab("Fraction of samples") +
+  ysum +
+  scale_fill_manual(values = c("No_evidence" = "gray60",
+                               "Evidence_E" = "#F39B7FFF",
+                               "Evidence_D" = "#3C5488FF",
+                               "Evidence_C" = "#4DBBD5FF",
+                               "Evidence_B" = "#00A087FF",
+                               "Evidence_A(unapproved)" = "pink",
+                               "Evidence_A(approved)" = "#E64B35FF")) +
+  guides(fill = guide_legend(reverse = TRUE,
+                             title = "Highest evidence level"))
+ggsave("result/pdf/analysis/treatment_overview/highest_evidence_level_fraction_by_cancertype.pdf", width = 12, height = 5)
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

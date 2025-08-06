@@ -1,0 +1,151 @@
+---
+title: "response"
+author: "Yuki Saito"
+date: "2025-07-13"
+output: html_document
+---
+
+- R markdown script to evaluate response by tumor type-specific biomarkers.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+library(stringi)
+library(ggsurvfit)
+library(gtsummary)
+library(survival)
+library(survminer)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/automatic_annotation.R")
+```
+
+```{r directory}
+dir.create("result/table/analysis/prognosis_by_alterations/", showWarnings = FALSE)
+```
+
+```{r read data}
+merged_data    <- read_csv("result/table/merged/merged_patient_data11.csv", na = "")
+evidenceA_data <- read_csv("result/table/evidence_A/Evidence_A_data_by_alteration_with_treatment_and_response.csv") 
+```
+
+```{r}
+response_df <- tibble()
+```
+
+```{r BRCA (Prostate)}
+tmp_alteation <- "BRCA12_mutationloss_Prostate"
+
+evidenceA_data %>% 
+  filter(Evidence_A_class == tmp_alteation) %>% 
+  filter(is.na(PreEP_automatic_lenient)) %>% 
+  filter(!is.na(PostEP_automatic_lenient)) %>% 
+  filter(PostEP_automatic_strict_best_response_name != "NE") %>% 
+  count(PostEP_automatic_strict, PostEP_automatic_strict_best_response_name,
+        PostEP_automatic_lenient, PostEP_automatic_lenient_response_name)
+
+tmp_response_df <- evidenceA_data %>% 
+  filter(Evidence_A_class == tmp_alteation) %>% 
+  filter(is.na(PreEP_automatic_lenient)) %>% 
+  filter(!is.na(PostEP_automatic_lenient)) %>% 
+  filter(PostEP_automatic_strict_best_response_name != "NE") %>% 
+  mutate(PostEP_automatic_strict_best_response_name = case_when(PostEP_automatic_strict_best_response_name == "NE, PR" ~ "PR",
+                                                                PostEP_automatic_strict_best_response_name == "NE, SD" ~ "SD",
+                                                                PostEP_automatic_strict_best_response_name == "PR, PR" ~ "PR",
+                                                                PostEP_automatic_strict_best_response_name == "SD, SD" ~ "SD",
+                                                                TRUE ~ PostEP_automatic_strict_best_response_name
+                                                                )) %>% 
+  mutate(PostEP_automatic_strict_best_response_name = factor(PostEP_automatic_strict_best_response_name, levels = c("PD", "SD", "PR", "CR"))) %>% 
+  count(Evidence_A_class, PostEP_automatic_strict_best_response_name) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+response_df <- bind_rows(response_df, tmp_response_df)
+
+ggplot(tmp_response_df) +
+  geom_bar(aes(x = Evidence_A_class, y = freq, fill = PostEP_automatic_strict_best_response_name), color = "black", stat = "identity", position = "fill") +
+  geom_text(aes(x = Evidence_A_class, y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  ysum +
+  theme(axis.text.x = element_text(size = 10)) +
+  theme(axis.title.x = element_blank()) +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of samples") +
+  ggtitle(tmp_alteation)
+```
+
+```{r FGFR2 (bile duct)}
+tmp_alteation <- "FGFR2_fusion_Cholangiocarcinoma"
+
+evidenceA_data %>% 
+  filter(Evidence_A_class == tmp_alteation) %>% 
+  filter(is.na(PreEP_automatic_lenient)) %>% 
+  filter(!is.na(PostEP_automatic_lenient)) %>% 
+  filter(PostEP_automatic_strict_best_response_name != "NE") %>% 
+  count(PostEP_automatic_strict, PostEP_automatic_strict_best_response_name,
+        PostEP_automatic_lenient, PostEP_automatic_lenient_response_name)
+
+tmp_response_df <- evidenceA_data %>% 
+  filter(Evidence_A_class == tmp_alteation) %>% 
+  filter(is.na(PreEP_automatic_lenient)) %>% 
+  filter(!is.na(PostEP_automatic_lenient)) %>% 
+  filter(PostEP_automatic_strict_best_response_name != "NE") %>% 
+  mutate(PostEP_automatic_strict_best_response_name = factor(PostEP_automatic_strict_best_response_name, levels = c("PD", "SD", "PR", "CR"))) %>% 
+  count(Evidence_A_class, PostEP_automatic_strict_best_response_name) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+response_df <- bind_rows(response_df, tmp_response_df)
+
+ggplot(tmp_response_df) +
+  geom_bar(aes(x = Evidence_A_class, y = freq, fill = PostEP_automatic_strict_best_response_name), color = "black", stat = "identity", position = "fill") +
+  geom_text(aes(x = Evidence_A_class, y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  ysum +
+  theme(axis.text.x = element_text(size = 10)) +
+  theme(axis.title.x = element_blank()) +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of samples") +
+  ggtitle(tmp_alteation)
+```
+
+```{r summary}
+response_df %>%
+  mutate(Evidence_A_class = factor(Evidence_A_class,
+                                   levels = c("BRCA12_mutationloss_Prostate", "FGFR2_fusion_Cholangiocarcinoma"))) %>% 
+  ggplot() +
+  geom_bar(aes(x = Evidence_A_class, y = freq, fill = PostEP_automatic_strict_best_response_name), color = "black", stat = "identity", position = "fill") +
+  geom_text(aes(x = Evidence_A_class, y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  ysum +
+  theme(axis.text.x = element_text(size = 10)) +
+  theme(axis.title.x = element_blank()) +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of samples")
+ggsave("result/pdf/analysis/prognosis_by_alterations/response_by_alterations.pdf")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

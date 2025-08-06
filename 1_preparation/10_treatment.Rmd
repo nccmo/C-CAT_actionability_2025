@@ -1,0 +1,107 @@
+---
+title: "treatment"
+author: "Yuki Saito"
+date: "2025-02-12"
+output: html_document
+---
+
+- R markdown script to organize treatment data.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r read in merged data, warning=FALSE, message=FALSE}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data7.csv", na = "")
+merged_data
+
+CODE_data <- merged_data %>% 
+  select(Tumor_Sample_Barcode,
+         Oncotree_CODE,
+         Oncotree_CODE_name,
+         ONCOTREE_Level1,
+         ONCOTREE_Level1_name,
+         Oncotree_CODE_Final_wide,
+         Oncotree_CODE_Final_narrow)
+CODE_data
+```
+
+```{r preparation}
+# list up organ names
+organ_names <- list.files("../../../sh_c-cat_analysis/data/ccat/ver20240621/F1CDx/",
+                          full.names = FALSE)
+organ_names[1:3]
+```
+
+```{r pre treatment, warning=FALSE, message=FALSE}
+# colnames reference
+case_cols <- read_xlsx("../../ref/colnames_ver202406.xlsx", "case") %>% 
+  filter(Pre_treatment_columns == "TRUE")
+case_cols["coltypes"][case_cols["coltypes"] == "character"] <- "c"
+case_cols["coltypes"][case_cols["coltypes"] == "numeric"] <- "n"
+case_cols["coltypes"][case_cols["coltypes"] == "logical"] <- "l"
+case_cols["coltypes"][case_cols["coltypes"] == "date"] <- "D"
+case_cols_collapsed <- paste(case_cols$coltypes, collapse = "")
+
+pre_treatment_data <- list()
+for (organ in organ_names){
+  # read in pre-treatment data
+  organ_pre_treatment_data <- read_csv(paste0("result/table/prep/case/", organ, "/pre_treatment_data.csv"),
+                                      col_types = case_cols_collapsed)
+  pre_treatment_data[[organ]] <- organ_pre_treatment_data
+}
+pre_treatment_data <- bind_rows(pre_treatment_data)
+```
+
+```{r post treatment, warning=FALSE, message=FALSE}
+# colnames reference
+case_colnames_df <- read_xlsx("../../ref/colnames_ver202406.xlsx", "case") %>% 
+  filter(Post_treatment_columns == "TRUE")
+head(case_colnames_df)
+
+case_cols <- case_colnames_df
+case_cols["coltypes"][case_cols["coltypes"] == "character"] <- "c"
+case_cols["coltypes"][case_cols["coltypes"] == "numeric"] <- "n"
+case_cols["coltypes"][case_cols["coltypes"] == "logical"] <- "l"
+case_cols["coltypes"][case_cols["coltypes"] == "date"] <- "D"
+case_cols_collapsed <- paste(case_cols$coltypes, collapse = "")
+
+post_treatment_data <- list()
+for (organ in organ_names){
+  # read in post-treatment data
+  organ_post_treatment_data <- read_csv(paste0("result/table/prep/case/", organ, "/post_treatment_data.csv"),
+                                        col_types = case_cols_collapsed)
+  post_treatment_data[[organ]] <- organ_post_treatment_data
+}
+post_treatment_data <- bind_rows(post_treatment_data)
+```
+
+```{r save}
+pre_treatment_data %>% 
+  left_join2(CODE_data) %>% 
+  write_excel_csv("result/table/merged/merged_pre_treatment_data.csv", na = "")
+post_treatment_data %>%
+  left_join2(CODE_data) %>% 
+  write_excel_csv("result/table/merged/merged_post_treatment_data.csv", na = "")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

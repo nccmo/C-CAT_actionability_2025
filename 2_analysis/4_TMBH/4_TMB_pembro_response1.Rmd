@@ -1,0 +1,354 @@
+---
+title: "TMB Pembro response"
+author: "Yuki Saito"
+date: "2025-01-06"
+output: html_document
+---
+
+- R markdown script for evaluating response to pembrolizumab in TMB-H cases (part1).
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(ggsurvfit)
+library(gtsummary)
+library(survival)
+library(survminer)
+library(scales)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/survival.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r read in merged data, warning=FALSE, message=FALSE}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "")
+merged_data
+```
+
+```{r selection of samples}
+merged_data2 <- merged_data %>%
+  filter(!is.na(TMB_score_F1)) %>% # exclusion of samples in which TMB cannot be determined
+  filter(TMB_EvidenceA == "TMB_high" | TMB_score_F1 < 10) %>%
+  mutate(TMB_status = if_else(TMB_score_F1 >= 10, "TMB-High", "TMB-Low"))
+
+merged_data2 %>% 
+  count(TMB_status)
+```
+
+```{r count}
+merged_data2 %>%
+  mutate(PostEP_pembrolizumab = if_else(is.na(PostEP_pembrolizumab), "No", "Yes")) %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  group_by(TMB_status) %>%
+  count(PostEP_pembrolizumab) %>% 
+  mutate(freq = n / sum(n) * 100,
+         sum = sum(n))
+
+merged_data2 %>%
+  mutate(PostEP_pembrolizumab = if_else(is.na(PostEP_pembrolizumab), "No", "Yes")) %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(is.na(PreEP_ICI)) %>% 
+  group_by(TMB_status) %>%
+  count(PostEP_pembrolizumab) %>% 
+  mutate(freq = n / sum(n) * 100,
+         sum = sum(n))
+```
+
+```{r pie chart in ICI naive}
+TMBH_treatment_data_no_prev_ICI <- merged_data2 %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(is.na(PreEP_ICI)) %>% 
+  filter(TMB_status == "TMB-High")
+
+TMBH_treatment_data_no_prev_ICI %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  count(PostEP_pembrolizumab_best_response) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+
+TMBH_pembro_response_df <- TMBH_treatment_data_no_prev_ICI %>%
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE",
+                                                      "PD",
+                                                      PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  count(PostEP_pembrolizumab_best_response) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = factor(PostEP_pembrolizumab_best_response, levels = c("PD", "SD", "PR", "CR"))) %>% 
+  arrange(PostEP_pembrolizumab_best_response) %>%
+  mutate(y_position = 1 - cumsum(freq) + (freq / 2))
+TMBH_pembro_response_df
+
+TMBH_pembro_response_df %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_pembro_response_in_noprev_ICI.csv")
+
+# pie chart
+ggplot(TMBH_pembro_response_df) +
+  geom_bar(aes(x = "", y = freq, fill = PostEP_pembrolizumab_best_response), color = "black", stat = "identity") +
+  geom_text(aes(x = "", y = y_position, label = paste0(scales::percent(freq, accuracy = 0.01))), size = 4) +
+  coord_polar("y") +
+  theme(axis.line = element_blank(),       # Remove axis lines
+        axis.text.x = element_blank(),     # Remove X-axis text
+        axis.text.y = element_blank(),     # Remove Y-axis text
+        axis.ticks = element_blank(),      # Remove axis ticks
+        axis.title.x = element_blank(),    # Remove X-axis title
+        axis.title.y = element_blank()) +  # Remove Y-axis title
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  labs(caption = str_c("n =", sum(TMBH_pembro_response_df$n), "\n",
+                       "Exclusion of ICI-treated cases"))
+ggsave("result/pdf/analysis/TMBH/TMBH_pembro_response_pie_chart_in_noprev_ICI.pdf")
+```
+
+```{r by cancer type in ICI naive}
+order_df <- read_xlsx("ref/Oncotree_CODE_order.xlsx")
+
+summary_no_prev_ICI <- TMBH_treatment_data_no_prev_ICI %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!is.na(PostEP_pembrolizumab_best_response)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE", "PD", PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  mutate(PostEP_pembrolizumab_best_response = factor(PostEP_pembrolizumab_best_response,
+                                                             levels = c("PD", "SD", "PR", "CR"))) %>% 
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  count(PostEP_pembrolizumab_best_response) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) 
+summary_no_prev_ICI
+
+summary_no_prev_ICI %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_response_in_noprev_ICI_by_cancer_type.csv")
+
+summary_no_prev_ICI %>% 
+  filter(sum >= 3) %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = order_df$Oncotree_CODE_Final_wide)) %>%
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = freq, fill = PostEP_pembrolizumab_best_response), color = "black", stat = "identity", position = "fill") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  ysum +
+  theme(axis.text.x = element_text(size = 10)) +
+  theme(axis.title.x = element_blank()) +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of samples") +
+  ggtitle("TMB-H") +
+  x90
+ggsave("result/pdf/analysis/TMBH/TMBH_response_in_noprev_ICI_by_cancer_type.pdf", create.dir = TRUE, width = 10)
+
+summary2_no_prev_ICI <- TMBH_treatment_data_no_prev_ICI %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!is.na(PostEP_pembrolizumab_best_response)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE", "PD", PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  mutate(response = case_when(PostEP_pembrolizumab_best_response %in% c("CR", "PR") ~ "response",
+                              PostEP_pembrolizumab_best_response %in% c("SD", "PD") ~ "nonresponse")) %>%
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  count(response) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+  
+summary2_no_prev_ICI %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_response_rate_in_noprev_ICI_by_cancer_type.csv")
+```
+
+```{r by cancer type in ICI treated}
+TMBH_treatment_data_prev_ICI <- merged_data2 %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PreEP_ICI)) %>% 
+  filter(TMB_status == "TMB-High")
+TMBH_treatment_data_prev_ICI
+
+summary_prev_ICI <- TMBH_treatment_data_prev_ICI %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!is.na(PostEP_pembrolizumab_best_response)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE", 
+                                                              "PD", 
+                                                              PostEP_pembrolizumab_best_response)) %>% 
+  filter(!is.na(PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  mutate(PostEP_pembrolizumab_best_response = factor(PostEP_pembrolizumab_best_response,
+                                                             levels = c("PD", "SD", "PR", "CR"))) %>% 
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  count(PostEP_pembrolizumab_best_response) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) 
+summary_prev_ICI
+
+summary_prev_ICI %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_response_in_prev_ICI_by_cancer_type.csv")
+
+summary_prev_ICI %>% 
+  filter(sum >= 3) %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = order_df$Oncotree_CODE_Final_wide)) %>%
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = freq, fill = PostEP_pembrolizumab_best_response), color = "black", stat = "identity", position = "fill") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  ysum +
+  theme(axis.text.x = element_text(size = 10)) +
+  theme(axis.title.x = element_blank()) +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of samples") +
+  ggtitle("TMB-H") +
+  x90
+ggsave("result/pdf/analysis/TMBH/TMBH_response_in_prev_ICI_by_cancer_type.pdf", create.dir = TRUE)
+
+summary2_prev_ICI <- TMBH_treatment_data_prev_ICI %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!is.na(PostEP_pembrolizumab_best_response)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE", "PD", PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  mutate(response = case_when(PostEP_pembrolizumab_best_response %in% c("CR", "PR") ~ "response",
+                              PostEP_pembrolizumab_best_response %in% c("SD", "PD") ~ "nonresponse")) %>%
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  count(response) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+    filter(response == "response")
+  
+summary2_prev_ICI %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_response_rate_in_prev_ICI_by_cancer_type.csv")
+```
+
+```{r prev ICI treatment}
+TMBH_treatment_data <- merged_data2 %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(TMB_status == "TMB-High")
+
+TMBH_treatment_data <- TMBH_treatment_data %>% 
+  mutate(PreEP_ICI_class = case_when(is.na(PreEP_ICI) ~ "Untreated",
+                                     TRUE ~ "ICI_treated")) %>% 
+  mutate(PreEP_ICI_class = factor(PreEP_ICI_class, levels = c("Untreated", "ICI_treated")))
+
+TMBH_treatment_data %>% 
+  count(PreEP_ICI_class)
+```
+
+```{r pembro administration rate by prev ICI}
+TMBH_pembro_adm_rate_data <- TMBH_treatment_data %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  mutate(PostEP_pembro = case_when(!is.na(PostEP_pembrolizumab) ~ "Pembrolizumab",
+                                  TRUE ~ NA_character_)) %>%
+  group_by(PreEP_ICI_class) %>% 
+  count(PostEP_pembro) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+TMBH_pembro_adm_rate_data
+
+TMBH_pembro_adm_rate_data %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_pembro_administration_rate_by_prev_ICI.csv")
+
+stat <- TMBH_pembro_adm_rate_data %>%
+  filter(PreEP_ICI_class %in% c("Untreated", "ICI_treated")) %>%
+  pull(n) %>%
+  matrix(ncol = 2) %>% 
+  fisher.test()
+
+TMBH_pembro_adm_rate_data %>% 
+  filter(!is.na(PostEP_pembro)) %>%
+  ggplot() +
+  geom_bar(aes(x = PreEP_ICI_class, y = freq), fill = "#00008b", color = "black", stat = "identity") +
+  geom_text(aes(x = PreEP_ICI_class, y = 1.025, label = str_c("(", sum, ")")), size = 4) +
+  ysum +
+  # no x lab title
+  theme(axis.title.x = element_blank()) +
+  ylab("Fraction of cases receiving Pembrolizumab (%)") +
+  labs(caption = str_c("p = ", stat$p.value))
+ggsave("result/pdf/analysis/TMBH/TMBH_pembro_administration_rate_by_prev_ICI.pdf")
+```
+
+```{r pembro response by prev ICI}
+TMBH_pembro_response_data <- TMBH_treatment_data %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!is.na(PostEP_pembrolizumab_best_response)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE", 
+                                                              "PD", 
+                                                              PostEP_pembrolizumab_best_response)) %>% 
+  group_by(PreEP_ICI_class) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  count(PostEP_pembrolizumab_best_response) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>%
+  mutate(PostEP_pembrolizumab_best_response = factor(PostEP_pembrolizumab_best_response, levels = c("PD", "SD", "PR", "CR")))
+TMBH_pembro_response_data
+
+TMBH_pembro_response_data %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_pembro_response_by_prev_ICI.csv")
+
+TMBH_pembro_response_data2 <- TMBH_treatment_data %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!is.na(PostEP_pembrolizumab_best_response)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE", 
+                                                      "PD", 
+                                                      PostEP_pembrolizumab_best_response)) %>% 
+  group_by(PreEP_ICI_class) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  mutate(PostEP_pembrolizumab_best_response2 = if_else(PostEP_pembrolizumab_best_response %in% c("CR", "PR"),
+                                                       "response", "nonresponse")) %>% 
+  count(PostEP_pembrolizumab_best_response2) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+TMBH_pembro_response_data2
+
+stat <- TMBH_pembro_response_data2 %>%
+  filter(PreEP_ICI_class %in% c("Untreated", "ICI_treated")) %>%
+  pull(n) %>%
+  matrix(ncol = 2) %>%
+  fisher.test()
+
+TMBH_pembro_response_data %>%
+  ggplot() +
+  geom_bar(aes(x = PreEP_ICI_class, y = freq, fill = PostEP_pembrolizumab_best_response), color = "black", stat = "identity") +
+  geom_text(aes(x = PreEP_ICI_class, y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  ysum +
+  theme(axis.text.x = element_text(size = 10)) +
+  theme(axis.title.x = element_blank()) +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of samples") +
+  ggtitle("TMB-H") +
+  labs(caption = str_c("p = ", stat$p.value))
+ggsave("result/pdf/analysis/TMBH/TMBH_pembro_response_by_prev_ICI.pdf")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

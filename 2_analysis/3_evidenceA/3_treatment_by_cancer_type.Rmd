@@ -1,0 +1,160 @@
+---
+title: "treatment_by_cancer_type"
+author: "Yuki Saito"
+date: "2024-08-13"
+output: html_document
+---
+
+- R markdown script to evaluate treatment in cases harboring level A (approved) alterations, categorized by tumor type.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/evidence_A/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/evidence_A/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r function}
+get_last_non_empty <- function(x) {
+  non_empty_elements <- x[x != ""]
+  return(tail(non_empty_elements, 1))
+}
+```
+
+```{r read in data}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "")
+# read in evidence A treatment data
+evidenceA_treatment_data <- read_csv("result/table/evidence_A/Evidence_A_data_by_alteration_with_treatment_and_response.csv", na = "")
+
+# approved only
+evidenceA_approved_treatment_data <- evidenceA_treatment_data %>% 
+  filter(Highest_evidence_level2 == "Evidence_A(approved)")
+```
+
+```{r analysis}
+evidenceA_approved_treatment_filtered_data <- evidenceA_approved_treatment_data %>%
+  filter(Pre_regimen_info_existence == "Yes" &
+           Post_regimen_info_existence == "Yes") %>%
+  mutate(PreEP_automatic_strict = if_else(is.na(PreEP_automatic_strict), "No", "Yes"),
+         PostEP_automatic_strict = if_else(is.na(PostEP_automatic_strict), "No", "Yes")) %>%
+  mutate(PostCGP_Treatment = case_when(PreEP_automatic_strict == "Yes" & PostEP_automatic_strict == "Yes" ~ "Both_administered",
+                                       PreEP_automatic_strict == "Yes" & PostEP_automatic_strict == "No" ~ "Previously_administered",
+                                       PreEP_automatic_strict == "No" & PostEP_automatic_strict == "Yes" ~ "Newly_administered",
+                                       TRUE ~ "Unadministered"))
+
+evidenceA_approved_treatment_filtered_data2 <- evidenceA_approved_treatment_filtered_data %>% 
+  select(Tumor_Sample_Barcode, Oncotree_CODE_Final_wide, Evidence_A_class, PostCGP_Treatment) %>%
+  unique()
+
+priority_order <- c("Newly_administered", "Both_administered", "Previously_administered", "Unadministered")
+evidenceA_approved_treatment_filtered_data_by_individual <-evidenceA_approved_treatment_filtered_data2 %>%
+  group_by(Tumor_Sample_Barcode, Oncotree_CODE_Final_wide) %>%
+  summarise(PostCGP_Treatment = first(PostCGP_Treatment[order(match(PostCGP_Treatment, priority_order))])) %>%
+  ungroup()
+```
+
+```{r pan-cancer}
+evidenceA_approved_treatment_filtered_data_by_individual %>% 
+  count(PostCGP_Treatment) %>%
+  mutate(freq = 100 * n / sum(n),
+         sum = sum(n)) 
+```
+
+```{r by cancer type}
+df_by_cancertype_wide <- evidenceA_approved_treatment_filtered_data_by_individual %>%
+  group_by(Oncotree_CODE_Final_wide) %>%
+  count(PostCGP_Treatment) %>% 
+  ungroup() %>% 
+  complete(Oncotree_CODE_Final_wide, PostCGP_Treatment, fill = list(n = 0)) %>%
+  group_by(Oncotree_CODE_Final_wide) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>%
+  mutate(PostCGP_Treatment = factor(PostCGP_Treatment, 
+                                    levels = c("Newly_administered", "Both_administered", "Previously_administered", "Unadministered"))) %>% 
+  ungroup()
+
+# save table
+df_by_cancertype_wide %>%
+  write_excel_csv("result/table/analysis/evidence_A/Evidence_A(approved)_treatment_summary_by_cancer_type.csv")
+df_by_cancertype_wide
+
+df_by_cancertype_wide2 <- df_by_cancertype_wide %>% 
+  filter(Oncotree_CODE_Final_wide %in% wide_cancer_order) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = rev(wide_cancer_order))) %>%
+  arrange(Oncotree_CODE_Final_wide) %>% 
+  #filter(sum >= 10) %>% 
+  filter(PostCGP_Treatment != "Unadministered")
+
+setdiff(wide_cancer_order, df_by_cancertype_wide2$Oncotree_CODE_Final_wide)
+
+df_by_cancertype_wide3 <- bind_rows(df_by_cancertype_wide2,
+                                    tibble(Oncotree_CODE_Final_wide = c(rep("Mesothelioma", 2), 
+                                                                        rep("PNS cancer (other)", 2)),
+                                           PostCGP_Treatment = rep(c("Newly_administered", "Previously_administered"), 2),
+                                           n = rep(0, 4),
+                                           freq = rep(0, 4),
+                                           sum = rep(0, 4))) %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = rev(wide_cancer_order))) %>%
+  arrange(Oncotree_CODE_Final_wide) %>% 
+  mutate(PostCGP_Treatment = factor(PostCGP_Treatment, levels = c("Previously_administered", "Both_administered", "Newly_administered")))
+
+# Create the plot
+fig <- ggplot(df_by_cancertype_wide3) +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = freq, fill = PostCGP_Treatment), color = "black", stat = "identity") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 1.025, label = paste0("(", sum, ")")), size = 2.5) +
+  scale_fill_manual(values = c("Newly_administered" = "#ff8093", 
+                               "Both_administered" = "#5584b2",
+                               "Previously_administered" = "#55b2b2")) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 1.1)) +
+  theme(axis.title.y = element_blank()) +
+  theme(axis.text.y = element_text(size = 8)) +
+  ylab("Fraction of samples")
+
+fig
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_treatment_summary_by_cancer_type.pdf", width = 5, height = 6)
+fig + theme(legend.position = "none")
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_treatment_summary_by_cancer_type_no_legend.pdf", width = 5, height = 6)
+
+fig <- df_by_cancertype_wide3 %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = wide_cancer_order)) %>%
+  arrange(Oncotree_CODE_Final_wide) %>% 
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = freq, fill = PostCGP_Treatment), color = "black", stat = "identity") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 1.025, label = paste0("(", sum, ")")), size = 2.5) +
+  scale_fill_manual(values = c("Newly_administered" = "#ff8093", 
+                               "Both_administered" = "#5584b2",
+                               "Previously_administered" = "#55b2b2")) +
+  ysum +
+  theme(axis.title.y = element_blank()) +
+  ylab("Fraction of samples") +
+  theme(legend.position = "none") +
+  x90
+fig
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_treatment_summary_by_cancer_type_no_legend_v2.pdf")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

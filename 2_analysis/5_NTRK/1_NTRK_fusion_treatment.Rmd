@@ -1,0 +1,132 @@
+---
+title: "NTRK_fusion_treatment"
+author: "Yuki Saito"
+date: "2024-12-26"
+output: html_document
+---
+
+- R markdown script to evaluate treatment response in NTRK fusion-harboring cases.
+    
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+library(scales)
+library(ggplot2)
+library(ggsci)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/NTRK/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/NTRK/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r input}
+NTRK_fusion_data <- read_csv("result/table/evidence_A/NTRK_fusion_PanCan/NTRK_fusion_PanCan_data_with_response.csv")
+NTRK_fusion_data
+```
+
+```{r analysis}
+NTRK_fusion_data %>%
+  count(Alteration, sort = TRUE)
+
+fusion_partner_data <- NTRK_fusion_data %>% 
+  mutate(Alteration = str_replace(Alteration, "_fusion_Somatic", "")) %>% 
+  select(Tumor_Sample_Barcode, Alteration) %>% 
+  group_by(Tumor_Sample_Barcode) %>%
+  summarize(Alteration = paste(Alteration, collapse = ", "))
+fusion_partner_data
+
+NTRK_fusion_data2 <- NTRK_fusion_data %>% 
+  select(Tumor_Sample_Barcode, Cancer_type, Cancer_type_last_level, Oncotree_CODE_Final_narrow, Oncotree_CODE_Final_wide,
+         Oncotree_CODE, Oncotree_CODE_name,
+         ONCOTREE_Level1,
+         Patho_diagnosis,
+         Patho_diagnosis_sample,
+         Pre_regimen_info_existence, Post_regimen_info_existence,
+         PreEP_automatic_lenient, PreEP_automatic_lenient_best_response_name,
+         PostEP_automatic_strict, PostEP_automatic_strict_best_response_name) %>% 
+  distinct() %>%
+  left_join2(fusion_partner_data) %>%
+  mutate(class = if_else(str_detect(Alteration, "ETV6"), "ETV6-NTRK3", "non ETV6-NTRK3"))
+
+tmp <- NTRK_fusion_data2 %>% 
+  count(Tumor_Sample_Barcode) %>% 
+  filter(n >= 2) %>% 
+  nrow()
+if (tmp > 0){
+  stop("something wrong")
+}
+
+tmp2 <- NTRK_fusion_data2 %>% 
+  filter(is.na(Alteration)) %>% 
+  nrow()
+if (tmp2 > 0){
+  stop("something wrong")
+}
+
+NTRK_fusion_data2
+```
+
+```{r save}
+# save
+NTRK_fusion_data2 %>% 
+  write_excel_csv("result/table/analysis/NTRK/NTRK_fusion_PanCan_data_with_response_by_individual.csv", na = "")  
+```
+
+```{r response by alteration}
+# RR
+stat1 <- fisher.test(matrix(c(8, 1, 9, 11), nrow = 2))
+stat1
+# DCR
+stat2 <- fisher.test(matrix(c(8, 1, 16, 4), nrow = 2))
+stat2
+
+NTRK_fusion_data2 %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(is.na(PreEP_automatic_lenient)) %>% 
+  filter(PostEP_automatic_strict_best_response_name != "NE") %>% 
+  mutate(PostEP_automatic_strict_best_response_name = if_else(PostEP_automatic_strict_best_response_name == "PD, PD", "PD", PostEP_automatic_strict_best_response_name)) %>% 
+  mutate(PostEP_automatic_strict_best_response_name = if_else(PostEP_automatic_strict_best_response_name == "SD, NE", "SD", PostEP_automatic_strict_best_response_name)) %>% 
+  mutate(PostEP_automatic_strict_best_response_name = if_else(PostEP_automatic_strict_best_response_name == "SD, SD", "SD", PostEP_automatic_strict_best_response_name)) %>% 
+  group_by(class) %>% 
+  count(PostEP_automatic_strict_best_response_name) %>%
+  mutate(sum = sum(n),
+         freq = n/sum) %>%
+  mutate(PostEP_automatic_strict_best_response_name = factor(PostEP_automatic_strict_best_response_name, levels = c("PD", "SD", "PR", "CR"))) %>%
+  ggplot(aes(x = class, y = freq, fill = PostEP_automatic_strict_best_response_name)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of samples") +
+  theme(axis.title.x = element_blank()) +
+  ysum +
+  labs(caption = str_c("RR: Fisher P =", round(stat1$p.value, 4), "\n",
+                       "DCR: Fisher P =", round(stat2$p.value, 4)))
+ggsave("result/pdf/analysis/NTRK/NTRK_fusion_PanCan_response_by_alteration2.pdf", create.dir = TRUE)
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

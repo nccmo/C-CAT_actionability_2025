@@ -1,0 +1,297 @@
+---
+title: "TRK_annotation"
+author: "Yuki Saito"
+date: "2025-02-12"
+output: html_document
+---
+
+- R markdown script to annotate the use of TRK inhibitors for each case.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+library(stringi)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/automatic_annotation.R")
+```
+
+```{r function}
+read_ref_csv <- function(input){
+  output <- read_csv(input, col_types = cols(.default = col_character())) %>% 
+    mutate(JP_name_half = stri_trans_general(JP_name, "Fullwidth-Halfwidth"),
+           JP_product_name_half = stri_trans_general(JP_product_name, "Fullwidth-Halfwidth"),
+           JP_product_name_half2 = stri_trans_general(JP_product_name2, "Fullwidth-Halfwidth"),
+           JP_abbreviation_half = stri_trans_general(JP_abbreviation, "Fullwidth-Halfwidth"))
+  return(output)
+}
+
+pre_selection2 <- function(input, ref_df, row_number){
+  output <- pre_selection(input = input,
+                          JP_name = ref_df$JP_name[row_number],
+                          JP_name_half = ref_df$JP_name_half[row_number],
+                          EN_name = ref_df$EN_name[row_number],
+                          JP_product_name = ref_df$JP_product_name[row_number],
+                          JP_product_name_half = ref_df$JP_product_name_half[row_number],
+                          EN_product_name = ref_df$EN_product_name[row_number],
+                          JP_product_name2 = ref_df$JP_product_name2[row_number],
+                          JP_product_name_half2 = ref_df$JP_product_name_half2[row_number],
+                          EN_product_name2 = ref_df$EN_product_name2[row_number],
+                          JP_abbreviation = ref_df$JP_abbreviation[row_number],
+                          JP_abbreviation_half = ref_df$JP_abbreviation_half[row_number],
+                          EN_abbreviation = ref_df$EN_abbreviation[row_number])
+}
+post_selection2 <- function(input, ref_df, row_number){
+  output <- post_selection(input = input,
+                           JP_name = ref_df$JP_name[row_number],
+                           JP_name_half = ref_df$JP_name_half[row_number],
+                           EN_name = ref_df$EN_name[row_number],
+                           JP_product_name = ref_df$JP_product_name[row_number],
+                           JP_product_name_half = ref_df$JP_product_name_half[row_number],
+                           EN_product_name = ref_df$EN_product_name[row_number],
+                           JP_product_name2 = ref_df$JP_product_name2[row_number],
+                           JP_product_name_half2 = ref_df$JP_product_name_half2[row_number],
+                           EN_product_name2 = ref_df$EN_product_name2[row_number],
+                           JP_abbreviation = ref_df$JP_abbreviation[row_number],
+                           JP_abbreviation_half = ref_df$JP_abbreviation_half[row_number],
+                           EN_abbreviation = ref_df$EN_abbreviation[row_number])
+}
+
+pre_selection2_lv1 <- function(input, ref_df, row_number){
+  output <- pre_selection_lv1(input = input,
+                              JP_name = ref_df$JP_name[row_number],
+                              JP_name_half = ref_df$JP_name_half[row_number],
+                              EN_name = ref_df$EN_name[row_number],
+                              JP_product_name = ref_df$JP_product_name[row_number],
+                              JP_product_name_half = ref_df$JP_product_name_half[row_number],
+                              EN_product_name = ref_df$EN_product_name[row_number],
+                              JP_product_name2 = ref_df$JP_product_name2[row_number],
+                              JP_product_name_half2 = ref_df$JP_product_name_half2[row_number],
+                              EN_product_name2 = ref_df$EN_product_name2[row_number],
+                              JP_abbreviation = ref_df$JP_abbreviation[row_number],
+                              JP_abbreviation_half = ref_df$JP_abbreviation_half[row_number],
+                              EN_abbreviation = ref_df$EN_abbreviation[row_number])
+}
+post_selection2_lv1 <- function(input, ref_df, row_number){
+  output <- post_selection_lv1(input = input,
+                               JP_name = ref_df$JP_name[row_number],
+                               JP_name_half = ref_df$JP_name_half[row_number],
+                               EN_name = ref_df$EN_name[row_number],
+                               JP_product_name = ref_df$JP_product_name[row_number],
+                               JP_product_name_half = ref_df$JP_product_name_half[row_number],
+                               EN_product_name = ref_df$EN_product_name[row_number],
+                               JP_product_name2 = ref_df$JP_product_name2[row_number],
+                               JP_product_name_half2 = ref_df$JP_product_name_half2[row_number],
+                               EN_product_name2 = ref_df$EN_product_name2[row_number],
+                               JP_abbreviation = ref_df$JP_abbreviation[row_number],
+                               JP_abbreviation_half = ref_df$JP_abbreviation_half[row_number],
+                               EN_abbreviation = ref_df$EN_abbreviation[row_number])
+}
+```
+
+```{r analysis, message=FALSE, warning=FALSE, error=FALSE}
+# read in data
+pre_treatment_data <- read_csv("result/table/merged/merged_pre_treatment_data.csv") %>% 
+  mutate(rowname = row_number())
+post_treatment_data <- read_csv("result/table/merged/merged_post_treatment_data.csv") %>%
+  mutate(rowname = row_number())
+
+# read in ref data
+ref_df <- read_ref_csv("../../ref/evidenceA_drug_ver202406/NTRK_fusion_PanCan_drug.csv")
+print(ref_df)
+
+for (i in 1:nrow(ref_df)) {
+  # preEP
+  assign(paste0("tmp_pre", i), pre_selection2(pre_treatment_data, ref_df, i))
+  column_name <- paste(ref_df$Name[i], ref_df$Category[i], sep = "_")
+  rownames_var <- get(paste0("tmp_pre", i))$rowname
+  pre_treatment_data <- pre_treatment_data %>%
+    mutate(!!sym(column_name) := if_else(row_number() %in% rownames_var, ref_df$Name[i], NA_character_))
+  
+  # postEP
+  assign(paste0("tmp_post", i), post_selection2(post_treatment_data, ref_df, i))
+  column_name <- paste(ref_df$Name[i], ref_df$Category[i], sep = "_")
+  rownames_var <- get(paste0("tmp_post", i))$rowname
+  post_treatment_data <- post_treatment_data %>%
+    mutate(!!sym(column_name) := if_else(row_number() %in% rownames_var, ref_df$Name[i], NA_character_))
+}
+
+# save
+pre_treatment_data %>% 
+  write_excel_csv("result/table/merged/merged_pre_treatment_data_TRK_inhibitor_automatic_annotation.csv", na = "")
+post_treatment_data %>% 
+  write_excel_csv("result/table/merged/merged_post_treatment_data_TRK_inhibitor_automatic_annotation.csv", na = "")
+```
+
+```{r analysis2}
+pre_df <- pre_treatment_data
+post_df <- post_treatment_data
+
+rowname_index <- which(colnames(pre_df) == "rowname")
+pre_df_strict <- pre_df %>% 
+  select(ends_with("_Strict")) %>% 
+  mutate(PreEP_automatic_strict = apply(., 1, function(row) {
+    paste(na.omit(row), collapse = ", ")
+  })) %>% 
+  mutate(PreEP_automatic_strict = if_else(PreEP_automatic_strict == "", NA_character_, PreEP_automatic_strict))
+
+pre_df <- pre_df %>%
+  mutate(PreEP_automatic_lenient = apply(pre_df[, (rowname_index + 1):ncol(pre_df)], 1, function(row) {
+    paste(na.omit(row), collapse = ", ")
+  })) %>% 
+  mutate(PreEP_automatic_lenient = if_else(PreEP_automatic_lenient == "", NA_character_, PreEP_automatic_lenient))
+pre_df <- pre_df %>% 
+  mutate(PreEP_automatic_strict = pre_df_strict$PreEP_automatic_strict)
+
+
+rowname_index <- which(colnames(post_df) == "rowname")
+post_df_strict <- post_df %>% 
+  select(ends_with("_Strict")) %>% 
+  mutate(PostEP_automatic_strict = apply(., 1, function(row) {
+    paste(na.omit(row), collapse = ", ")
+  })) %>% 
+  mutate(PostEP_automatic_strict = if_else(PostEP_automatic_strict == "", NA_character_, PostEP_automatic_strict))
+
+post_df <- post_df %>%
+  mutate(PostEP_automatic_lenient = apply(post_df[, (rowname_index + 1):ncol(post_df)], 1, function(row) {
+    paste(na.omit(row), collapse = ", ")
+  })) %>% 
+  mutate(PostEP_automatic_lenient = if_else(PostEP_automatic_lenient == "", NA_character_, PostEP_automatic_lenient))
+post_df <- post_df %>%
+  mutate(PostEP_automatic_strict = post_df_strict$PostEP_automatic_strict)
+
+# pre analysis
+pre_regimen_info_existence_samples <- pre_df %>% 
+  filter(!is.na(PreEP_regimen_regimen) |
+           !is.na(PreEP_regimen_drug_JP) |
+           !is.na(PreEP_regimen_drug_EN) |
+           !is.na(PreEP_regimen_drug_input) |
+           !is.na(PreEP_regimen_drug_input_product)) %>% 
+  pull(Tumor_Sample_Barcode) %>% 
+  unique()
+pre_treatment_samples <- pre_df %>% 
+  filter(!is.na(PreEP_automatic_strict)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_strict) %>% 
+  unique() %>% 
+  group_by(Tumor_Sample_Barcode) %>% 
+  summarise(PreEP_automatic_strict = paste(PreEP_automatic_strict, collapse = ", "))
+pre_treatment_samples2 <- pre_df %>%
+  filter(!is.na(PreEP_automatic_lenient)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_lenient) %>%
+  unique() %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(PreEP_automatic_lenient = paste(PreEP_automatic_lenient, collapse = ", "))
+
+pre_treatment_samples_with_response <- pre_df %>% 
+  filter(!is.na(PreEP_automatic_strict)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_strict, PreEP_regimen_best_response_name, PreEP_regimen_startdate) %>% 
+  unique() %>% 
+  group_by(Tumor_Sample_Barcode) %>% 
+  summarise(PreEP_automatic_strict = paste(PreEP_automatic_strict, collapse = ", "),
+            PreEP_automatic_strict_best_response_name = paste(PreEP_regimen_best_response_name, collapse = ", "),
+            PreEP_regimen_startdate = paste(PreEP_regimen_startdate, collapse = ", "))
+pre_treatment_samples2_with_response <- pre_df %>%
+  filter(!is.na(PreEP_automatic_lenient)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_lenient, PreEP_regimen_best_response_name, PreEP_regimen_startdate) %>%
+  unique() %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(PreEP_automatic_lenient = paste(PreEP_automatic_lenient, collapse = ", "),
+            PreEP_automatic_lenient_best_response_name = paste(PreEP_regimen_best_response_name, collapse = ", "),
+            PreEP_regimen_startdate = paste(PreEP_regimen_startdate, collapse = ", "))
+
+# check
+tmp <- pre_df %>% 
+  mutate(pre_regimen_info_existence = ifelse(Tumor_Sample_Barcode %in% pre_regimen_info_existence_samples, "Yes", "No")) %>% 
+  filter(!is.na(PreEP_automatic_lenient)) %>% 
+  filter(pre_regimen_info_existence == "No") %>% 
+  nrow()
+if (tmp > 0){
+  stop(tmp_evidence_A_class)
+}
+
+# post analysis
+post_regimen_info_existence_samples <- post_df %>% 
+  filter(!is.na(PostEP_regimen_regimen) |
+           !is.na(PostEP_regimen_drug_JP) |
+           !is.na(PostEP_regimen_drug_EN) |
+           !is.na(PostEP_regimen_drug_input) |
+           !is.na(PostEP_regimen_drug_input_product)) %>% 
+  pull(Tumor_Sample_Barcode) %>% 
+  unique()
+post_treatment_samples <- post_df %>%
+  filter(!is.na(PostEP_automatic_strict)) %>% 
+  select(Tumor_Sample_Barcode, PostEP_automatic_strict) %>% 
+  unique() %>% 
+  group_by(Tumor_Sample_Barcode) %>% 
+  summarise(PostEP_automatic_strict = paste(PostEP_automatic_strict, collapse = ", "))
+post_treatment_samples2 <- post_df %>%
+  filter(!is.na(PostEP_automatic_lenient)) %>% 
+  select(Tumor_Sample_Barcode, PostEP_automatic_lenient) %>%
+  unique() %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(PostEP_automatic_lenient = paste(PostEP_automatic_lenient, collapse = ", "))
+post_treatment_samples_with_response <- post_df %>% 
+  filter(!is.na(PostEP_automatic_strict)) %>% 
+  select(Tumor_Sample_Barcode, PostEP_automatic_strict, PostEP_regimen_best_response_name, PostEP_regimen_startdate) %>% 
+  unique() %>% 
+  group_by(Tumor_Sample_Barcode) %>% 
+  summarise(PostEP_automatic_strict = paste(PostEP_automatic_strict, collapse = ", "),
+            PostEP_automatic_strict_best_response_name = paste(PostEP_regimen_best_response_name, collapse = ", "),
+            PostEP_regimen_startdate = paste(PostEP_regimen_startdate, collapse = ", "))
+post_treatment_samples2_with_response <- post_df %>%
+  filter(!is.na(PostEP_automatic_lenient)) %>% 
+  select(Tumor_Sample_Barcode, PostEP_automatic_lenient, PostEP_regimen_best_response_name, PostEP_regimen_startdate) %>%
+  unique() %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(PostEP_automatic_lenient = paste(PostEP_automatic_lenient, collapse = ", "),
+            PostEP_automatic_lenient_response_name = paste(PostEP_regimen_best_response_name, collapse = ", "),
+            PostEP_regimen_startdate = paste(PostEP_regimen_startdate, collapse = ", "))
+
+# check
+tmp <- post_df %>% 
+  mutate(post_regimen_info_existence = ifelse(Tumor_Sample_Barcode %in% post_regimen_info_existence_samples, "Yes", "No")) %>% 
+  filter(!is.na(PostEP_automatic_lenient)) %>% 
+  filter(post_regimen_info_existence == "No") %>% 
+  nrow()
+if (tmp > 0){
+  stop(tmp_evidence_A_class)
+}
+
+pre_treatment_samples2_with_response <- pre_treatment_samples2_with_response %>% 
+  rename(PreEP_TRK = PreEP_automatic_lenient,
+         PreEP_TRK_best_response = PreEP_automatic_lenient_best_response_name,
+         PreEP_TRK_startdate = PreEP_regimen_startdate)
+post_treatment_samples2_with_response <- post_treatment_samples2_with_response %>%
+  rename(PostEP_TRK = PostEP_automatic_lenient,
+         PostEP_TRK_best_response = PostEP_automatic_lenient_response_name,
+         PostEP_TRK_startdate = PostEP_regimen_startdate)
+```
+
+```{r save}
+# output
+merged_data <- read_csv("result/table/merged/merged_patient_data8.csv", na = "") 
+
+merged_data <- merged_data %>%
+  left_join2(pre_treatment_samples2_with_response, by = "Tumor_Sample_Barcode") %>%
+  left_join2(post_treatment_samples2_with_response, by = "Tumor_Sample_Barcode")
+
+merged_data %>%
+  write_excel_csv("result/table/merged/merged_patient_data9.csv", na = "")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

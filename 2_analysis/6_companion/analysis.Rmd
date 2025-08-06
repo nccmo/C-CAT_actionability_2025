@@ -1,0 +1,83 @@
+---
+title: "Companion analysis"
+author: "Yuki Saito"
+date: "2024-08-23"
+output: html_document
+---
+
+- R markdown script for analysis related to non-CGP CDx.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r make directory}
+dir.create("result/table/analysis/companion/", showWarnings = FALSE)
+dir.create("result/pdf/analysis/companion/", showWarnings = FALSE)
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r summary}
+df <- read_csv("result/table/analysis/companion/companion_summary3.csv", na = "")
+
+df %>% 
+  count(Companion_method_name2)
+```
+
+```{r analysis}
+df %>% 
+  filter(!Companion_method_name2 %in% c("G360CDx", "Unknown", "Other")) %>% 
+  filter(!is.na(Companion_method_name2)) %>% 
+  count(class, Companion_method_name2)  
+  
+df %>% 
+  filter(Companion_method_name2 != "G360CDx" | is.na(Companion_method_name2)) %>%  
+  mutate(Companion_name = if_else(Companion_name == "Low", "Negative", Companion_name)) %>% 
+  unite("Companion_F1_alteration", c(Companion_name, F1_alteration), sep = ":") %>% 
+  filter(Companion_F1_alteration %in% c("Negative:Positive", "Positive:Negative", "Positive:Positive")) %>% 
+  count(Companion_F1_alteration) %>% 
+  mutate(sum = sum(n),
+         freq = n/sum)
+  
+df %>% 
+  filter(Companion_method_name2 != "G360CDx" | is.na(Companion_method_name2)) %>% 
+  mutate(Companion_name = if_else(Companion_name == "Low", "Negative", Companion_name)) %>% 
+  unite("Companion_F1_alteration", c(Companion_name, F1_alteration), sep = ":") %>% 
+  filter(Companion_F1_alteration %in% c("Negative:Positive", "Positive:Negative", "Positive:Positive")) %>%
+  mutate(class = factor(class,
+                        levels = c("GI_KRAS", "GI_NRAS", "GI_BRAF", "Skin_BRAF", "Lung_EGFR",
+                                   "Lung_ALK", "Lung_ROS1", "Bowel_HER2", "Breast_HER2", "Salivary_HER2", "Stomach_HER2", "MSI"))) %>% 
+  group_by(class) %>% 
+  count(Companion_F1_alteration) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  ggplot() +
+  geom_bar(aes(x = class, y = freq, fill = Companion_F1_alteration), color = "black", stat = "identity") +
+  geom_text(aes(x = class, y = 1.025, label = paste0("(", sum, ")")), size = 3) +
+  x90 +
+  ysum +
+  ylab("Fraction of samples") +
+  scale_fill_manual(values = c("Negative:Positive" = "red", "Positive:Negative" = "blue", "Positive:Positive" = "gray")) +
+  ggtitle("Companion-positive and/or F1-positive samples")
+ggsave("result/pdf/analysis/companion/Companion_concordance_summary.pdf", width = 8, height = 6)
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

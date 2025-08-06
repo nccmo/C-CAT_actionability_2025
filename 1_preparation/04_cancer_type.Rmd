@@ -1,0 +1,256 @@
+---
+title: "cancer_type"
+author: "Yuki Saito"
+date: "2024-06-23"
+output: html_document
+---
+
+- R markdown script to annotate tumor types.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r directory, message=FALSE, warning=FALSE}
+# make directory
+dir.create("result/table/cancer_type/converter/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r data, message=FALSE, warning=FALSE}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data.csv", na = "")
+# read in oncotree cancertype data
+Oncotree_cancertype_df <- read_xlsx("../../ref/Oncotree_tumor_types_with_modifications_v2.xlsx")
+```
+
+```{r WHO BRAIN}
+who_brain_converter <- read_xlsx("ref/WHO_BRAIN_converter.xlsx") %>% 
+  select(-Oncotree_CODE_name)
+who_brain_converter
+
+merged_data2 <- merged_data %>% 
+  left_join2(who_brain_converter) %>%
+  mutate(Oncotree_CODE_modified = if_else(is.na(Oncotree_CODE_modified), Oncotree_CODE, Oncotree_CODE_modified)) %>% 
+  mutate(ONCOTREE_Level1 = if_else(ONCOTREE_Level1 == "WHO_BRAIN", "BRAIN", ONCOTREE_Level1))
+
+# check
+merged_data2 %>% 
+  filter(Oncotree_CODE != Oncotree_CODE_modified) %>% 
+  count(Oncotree_CODE, ONCOTREE_Level1)
+```
+
+```{r converter}
+Oncotree_cancertype_df2 <- Oncotree_cancertype_df %>%
+  mutate(across(starts_with("level_"), ~ str_match(., "\\(([^\\)]*)\\)$")[, 2])) %>% 
+  select(level_2, level_3, level_4, level_5, level_6, level_7)
+
+tmp1 <- Oncotree_cancertype_df2 %>% 
+  filter(!is.na(level_2)) %>% 
+  select(level_2) %>% 
+  mutate(Oncotree_CODE_Final = level_2) %>% 
+  rename(Oncotree_CODE_modified = level_2)
+tmp2 <- Oncotree_cancertype_df2 %>% 
+  filter(!is.na(level_3)) %>%
+  select(level_2, level_3) %>% 
+  rename(Oncotree_CODE_Final = level_2) %>% 
+  rename(Oncotree_CODE_modified = level_3)
+tmp3 <- Oncotree_cancertype_df2 %>% 
+  filter(!is.na(level_4)) %>%
+  select(level_2, level_4) %>% 
+  rename(Oncotree_CODE_Final = level_2) %>% 
+  rename(Oncotree_CODE_modified = level_4)
+tmp4 <- Oncotree_cancertype_df2 %>%
+  filter(!is.na(level_5)) %>%
+  select(level_2, level_5) %>% 
+  rename(Oncotree_CODE_Final = level_2) %>% 
+  rename(Oncotree_CODE_modified = level_5)
+tmp5 <- Oncotree_cancertype_df2 %>%
+  filter(!is.na(level_6)) %>%
+  select(level_2, level_6) %>% 
+  rename(Oncotree_CODE_Final = level_2) %>% 
+  rename(Oncotree_CODE_modified = level_6)
+tmp6 <- Oncotree_cancertype_df2 %>%
+  filter(!is.na(level_7)) %>%
+  select(level_2, level_7) %>% 
+  rename(Oncotree_CODE_Final = level_2) %>% 
+  rename(Oncotree_CODE_modified = level_7)
+
+Oncotree_annotator <- bind_rows(tmp1, tmp2, tmp3, tmp4, tmp5, tmp6) %>% 
+  unique()
+print(Oncotree_annotator)
+```
+
+```{r converter2}
+Oncotree_cancertype_df3 <- Oncotree_cancertype_df %>%
+  mutate(across(starts_with("level_"), ~ str_match(., "\\(([^\\)]*)\\)$")[, 2]))
+
+tmp7 <- Oncotree_cancertype_df3 %>%
+  filter(is.na(level_2)) %>% 
+  select(level_1, metamaintype_new) %>% 
+  rename(Oncotree_CODE_modified = level_1)
+tmp8 <- Oncotree_cancertype_df3 %>% 
+  filter(!is.na(level_2)) %>%
+  filter(is.na(level_3)) %>% 
+  select(level_2, metamaintype_new) %>% 
+  rename(Oncotree_CODE_modified = level_2)
+tmp9 <- Oncotree_cancertype_df3 %>%
+  filter(!is.na(level_3)) %>%
+  filter(is.na(level_4)) %>% 
+  select(level_3, metamaintype_new) %>%
+  rename(Oncotree_CODE_modified = level_3)
+tmp10 <- Oncotree_cancertype_df3 %>%
+  filter(!is.na(level_4)) %>%
+  filter(is.na(level_5)) %>% 
+  select(level_4, metamaintype_new) %>%
+  rename(Oncotree_CODE_modified = level_4)
+tmp11 <- Oncotree_cancertype_df3 %>%
+  filter(!is.na(level_5)) %>%
+  filter(is.na(level_6)) %>% 
+  select(level_5, metamaintype_new) %>%
+  rename(Oncotree_CODE_modified = level_5)
+tmp12 <- Oncotree_cancertype_df3 %>%
+  filter(!is.na(level_6)) %>%
+  filter(is.na(level_7)) %>% 
+  select(level_6, metamaintype_new) %>%
+  rename(Oncotree_CODE_modified = level_6)
+tmp13 <- Oncotree_cancertype_df3 %>%
+  filter(!is.na(level_7)) %>% 
+  select(level_7, metamaintype_new) %>%
+  rename(Oncotree_CODE_modified = level_7)
+
+Oncotree_annotator2 <- bind_rows(tmp7, tmp8, tmp9, tmp10, tmp11, tmp12, tmp13) %>%
+  unique()
+Oncotree_annotator2
+```
+
+```{r save}
+Oncotree_annotator %>% 
+  write_tsv("result/table/cancer_type/converter/Oncotree_annotator_automatic.tsv")
+Oncotree_annotator2 %>% 
+  write_tsv("result/table/cancer_type/converter/Oncotree_annotator2_automatic.tsv")
+```
+
+```{r manual annotation}
+merged_data3 <- merged_data2 %>% 
+  left_join(Oncotree_annotator)
+
+merged_data3 <- merged_data3 %>% 
+  mutate(Oncotree_CODE_Final = if_else(Oncotree_CODE %in% c("GBC", "GBASC", "GBAD", "SCGBC"), "GBC", Oncotree_CODE_Final)) %>% 
+  mutate(Oncotree_CODE_Final = if_else(Oncotree_CODE %in% c("CHOL", "EHCH", "IHCH", "PHCH"), "CHOL", Oncotree_CODE_Final)) %>%
+  mutate(Oncotree_CODE_Final = if_else(Oncotree_CODE_Final %in% c("ICPN", "IPN"), NA_character_, Oncotree_CODE_Final)) %>%
+  mutate(Oncotree_CODE_Final = if_else(Oncotree_CODE_Final == "SIC", "SBC", Oncotree_CODE_Final)) %>%
+  rename(Oncotree_CODE_Final_narrow = Oncotree_CODE_Final)
+```
+
+```{r merge}
+# merge
+merged_data4 <- merged_data3 %>%
+  left_join(Oncotree_annotator2) %>%
+  rename(Oncotree_CODE_Final_wide = metamaintype_new) %>% 
+  mutate(OncoTree_CODE_Final_narrow2 = if_else(is.na(Oncotree_CODE_Final_narrow), ONCOTREE_Level1, Oncotree_CODE_Final_narrow)) %>%
+  mutate(OncoTree_CODE_Final_narrow2 = if_else(OncoTree_CODE_Final_narrow2 == "WHO_BRAIN", "BRAIN", OncoTree_CODE_Final_narrow2)) %>%
+  left_join(Oncotree_annotator2, by = c("OncoTree_CODE_Final_narrow2" = "Oncotree_CODE_modified")) %>%
+  rename(Oncotree_CODE_Final_wide2 = metamaintype_new) %>% 
+  select(-OncoTree_CODE_Final_narrow2) %>% 
+  mutate(Oncotree_CODE_Final_wide = if_else(is.na(Oncotree_CODE_Final_wide), Oncotree_CODE_Final_wide2, Oncotree_CODE_Final_wide)) 
+
+# check
+merged_data4 %>%
+  filter(Oncotree_CODE_Final_wide != Oncotree_CODE_Final_wide2) %>% 
+  count(Oncotree_CODE,
+        Oncotree_CODE_modified,
+        Oncotree_CODE_Final_narrow,
+        Oncotree_CODE_Final_wide, Oncotree_CODE_Final_wide2)
+
+merged_data5 <- merged_data4 %>% 
+  mutate(Oncotree_CODE_Final_wide = if_else(Oncotree_CODE %in%  c("EPM", "MELC", "PCNSM", "SCLC", "WHO_SEPMT"),
+                                            Oncotree_CODE_Final_wide, 
+                                            Oncotree_CODE_Final_wide2)) %>% 
+  select(-Oncotree_CODE_Final_wide2)
+```
+
+```{r rename}
+merged_data6 <- merged_data5 %>% 
+  mutate(Oncotree_CODE_Final_wide = case_when(Oncotree_CODE_Final_wide %in% c("Thymic Cancer",
+                                                                              "Bowel Cancer",
+                                                                              "Ovarian/Fallopian Tube Cancer",
+                                                                              "Uterine Cancer",
+                                                                              "Vulvar/Vaginal Cancer",
+                                                                              "Kidney Cancer",
+                                                                              "Testicular Cancer",
+                                                                              "Lung Cancer",
+                                                                              "Pleural Cancer",
+                                                                              "CNS/Brain Cancer",
+                                                                              "Adrenal Gland Cancer",
+                                                                              "Eye Cancer") ~ str_c(Oncotree_CODE_Final_wide, " (detail unknown)"),
+                                            Oncotree_CODE_Final_wide %in% c("Esophageal/Stomach Cancer",
+                                                                            "Soft Tissue Cancer",
+                                                                            "Other Cancer") ~ str_c(Oncotree_CODE_Final_wide, " (detail unknown / other)"),
+                                            Oncotree_CODE_Final_wide %in% c("Head and Neck Cancer",
+                                                                            "Skin Cancer",
+                                                                            "CNS Cancer",
+                                                                            "Peripheral Nervous System Cancer") ~ str_c(Oncotree_CODE_Final_wide, " (other)"),
+                                            TRUE ~ Oncotree_CODE_Final_wide))
+
+merged_data6 <- merged_data6 %>%
+  mutate(Oncotree_CODE_Final_wide = paste0(
+    substr(Oncotree_CODE_Final_wide, 1, 1),
+    tolower(substr(Oncotree_CODE_Final_wide, 2, nchar(Oncotree_CODE_Final_wide)))
+  )) %>%
+  mutate(ONCOTREE_Level1 = paste0(
+    substr(ONCOTREE_Level1, 1, 1),
+    tolower(substr(ONCOTREE_Level1, 2, nchar(ONCOTREE_Level1)))
+  )) %>% 
+  mutate(ONCOTREE_Level1 = case_when(ONCOTREE_Level1 == "Pns" ~ "PNS",
+                                     ONCOTREE_Level1 == "Ampulla_of_vater" ~ "Ampulla of Vater",
+                                     TRUE ~ ONCOTREE_Level1)) %>% 
+  mutate(ONCOTREE_Level1 = str_replace(ONCOTREE_Level1, "_", " ")) %>% 
+  mutate(Oncotree_CODE_Final_wide = case_when(Oncotree_CODE_Final_wide == "Cns cancer (other)" ~ "CNS cancer (other)",
+                                              Oncotree_CODE_Final_wide == "Peripheral nervous system cancer (other)" ~ "PNS cancer (other)",
+                                              Oncotree_CODE_Final_wide == "Cns/brain cancer (detail unknown)" ~ "CNS/brain cancer (detail unknown)",
+                                              Oncotree_CODE_Final_wide == "Extramammary paget disease" ~ "EMPD",
+                                              Oncotree_CODE_Final_wide == "Cancer of unknown primary" ~ "CUP",
+                                              Oncotree_CODE_Final_wide == "Esophageal squamous cell carcinoma" ~ "ESCC",
+                                              Oncotree_CODE_Final_wide == "Esophagogastric adenocarcinoma" ~ "EGAC",
+                                              Oncotree_CODE_Final_wide == "Gastrointestinal neuroendocrine tumor" ~ "GI-NET",
+                                              Oncotree_CODE_Final_wide == "Gastrointestinal stromal tumor" ~ "GIST",
+                                              Oncotree_CODE_Final_wide == "Non-small cell lung cancer" ~ "NSCLC",
+                                              Oncotree_CODE_Final_wide == "Small cell lung cancer" ~ "SCLC",
+                                              TRUE ~ Oncotree_CODE_Final_wide))
+
+# check
+merged_data6 %>% 
+  filter(is.na(Oncotree_CODE_Final_wide))
+```
+
+```{r save2}
+merged_data6 %>% 
+  write_excel_csv("result/table/merged/merged_patient_data2.csv", na = "")
+
+merged_data6 %>% 
+  count(ONCOTREE_Level1,
+        Oncotree_CODE_Final_narrow, 
+        Oncotree_CODE_Final_wide) %>% 
+  write_tsv("result/table/cancer_type/ONCOTREE_Level1_Oncotree_CODE_Final_narrow_wide.tsv", na = "")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

@@ -1,0 +1,225 @@
+---
+title: "Case_data_organization"
+author: "Yuki Saito"
+date: "2024-03-05"
+output: html_document
+---
+
+- R markdown script to process and organize case data downloaded from C-CAT. 
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+```
+
+```{r make directory}
+dir.create("result/table/prep/case", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r preparation, warning=FALSE, message=FALSE}
+organ <- "bowel"
+files <- list.files(paste0("../../../sh_c-cat_analysis/data/ccat/ver20240621/F1CDx/", organ, "/"), 
+                    pattern = "^case.*\\.csv$", 
+                    full.names = TRUE, 
+                    recursive = TRUE)
+case_data <- lapply(files, 
+                    function(file) 
+                      read_csv(file,
+                               locale = locale(encoding = "Shift-JIS")))
+
+col_types <- sapply(case_data[[11]], class)
+
+col_types_tibble <- tibble(
+  Column = names(col_types),
+  Type = as.character(col_types)
+)
+
+col_types_tibble %>% 
+  write_excel_csv("result/table/prep/case/col_types.csv", na = "")
+```
+
+```{r preparation}
+# list up organ names
+organ_names <- list.files("../../../sh_c-cat_analysis/data/ccat/ver20240621/F1CDx/",
+                          full.names = FALSE)
+organ_names[1:3]
+
+# colnames reference
+case_colnames_df <- read_xlsx("../../ref/colnames_ver202406.xlsx", "case")
+head(case_colnames_df)
+
+case_cols <- case_colnames_df
+case_cols["coltypes"][case_cols["coltypes"] == "character"] <- "c"
+case_cols["coltypes"][case_cols["coltypes"] == "numeric"] <- "n"
+case_cols["coltypes"][case_cols["coltypes"] == "logical"] <- "l"
+case_cols["coltypes"][case_cols["coltypes"] == "date"] <- "D"
+case_cols_collapsed <- paste(case_cols$coltypes, collapse = "")
+
+# column separation
+patient_columns <- case_colnames_df %>% 
+  filter(Patient_columns) %>%
+  select(colnames_ys)
+double_multiple_columns <- case_colnames_df %>% 
+  filter(Double_multiple_columns) %>%
+  select(colnames_ys)
+FH_columns <- case_colnames_df %>% 
+  filter(FH_columns) %>% 
+  select(colnames_ys)
+metastasis_columns <- case_colnames_df %>% 
+  filter(Metastasis_columns) %>% 
+  select(colnames_ys)
+biomarker_columns <- case_colnames_df %>% 
+  filter(Biomarker_columns) %>%
+  select(colnames_ys)
+pre_treatment_columns <- case_colnames_df %>% 
+  filter(Pre_treatment_columns) %>%
+  select(colnames_ys)
+post_treatment_columns <- case_colnames_df %>% 
+  filter(Post_treatment_columns) %>%
+  select(colnames_ys)
+prognosis_columns <- case_colnames_df %>% 
+  filter(Prognosis_columns) %>%
+  select(colnames_ys)
+```
+
+```{r analysis, warning=FALSE, message=FALSE}
+for (organ in organ_names){
+  # list all csv files in the directory, including subdirectories
+  files <- list.files(paste0("../../../sh_c-cat_analysis/data/ccat/ver20240621/F1CDx/", organ, "/"), 
+                      pattern = "^case.*\\.csv$", 
+                      full.names = TRUE, 
+                      recursive = TRUE)
+  # read all these csv files (UTF-8 encoding is used by default)) 
+  case_data <- lapply(files, 
+                      function(file) 
+                        # CP932 encoding is used for Japanese characters
+                        read_csv(file, 
+                                 locale = locale(encoding = "Shift-JIS"), 
+                                 col_types = case_cols_collapsed))
+  
+  # separate data
+  patient_data <- list()
+  double_multiple_data <- list()
+  FH_data <- list()
+  metastasis_data <- list()
+  biomarker_data <- list()
+  pre_treatment_data <- list()
+  post_treatment_data <- list()
+  prognosis_data <- list()
+  
+  for (i in 1:length(case_data)){
+    # check if column names match
+    if (all(colnames(case_data[[i]]) != case_colnames_df$names_EN)) {
+      stop("Column names do not match")
+    }
+    # rename columns
+    colnames(case_data[[i]]) <- case_colnames_df$colnames_ys
+    
+    # select columns
+    patient_data[[i]] <- case_data[[i]] %>% 
+      select(patient_columns$colnames_ys) %>% 
+      unique()
+    double_multiple_data[[i]] <- case_data[[i]] %>%
+      select(double_multiple_columns$colnames_ys) %>% 
+      unique()
+    FH_data[[i]] <- case_data[[i]] %>%
+      select(FH_columns$colnames_ys) %>% 
+      unique()    
+    metastasis_data <- case_data[[i]] %>% 
+      select(metastasis_columns$colnames_ys) %>% 
+      unique()    
+    biomarker_data[[i]] <- case_data[[i]] %>% 
+      select(biomarker_columns$colnames_ys) %>% 
+      unique()
+    pre_treatment_data[[i]] <- case_data[[i]] %>% 
+      select(pre_treatment_columns$colnames_ys) %>% 
+      unique() 
+    post_treatment_data[[i]] <- case_data[[i]] %>%
+      select(post_treatment_columns$colnames_ys) %>% 
+      unique()
+    prognosis_data[[i]] <- case_data[[i]] %>%
+      select(prognosis_columns$colnames_ys) %>% 
+      unique()
+  }
+  
+  # merge all data
+  patient_data <- bind_rows(patient_data)
+  double_multiple_data <- bind_rows(double_multiple_data)
+  FH_data <- bind_rows(FH_data)
+  metastasis_data <- bind_rows(metastasis_data)
+  biomarker_data <- bind_rows(biomarker_data)
+  pre_treatment_data <- bind_rows(pre_treatment_data)
+  post_treatment_data <- bind_rows(post_treatment_data)
+  prognosis_data <- bind_rows(prognosis_data)
+  rm(case_data)
+
+  # make directiory if not exist
+  dir.create(paste0("result/table/prep/case/", organ), showWarnings = FALSE, recursive = TRUE)
+  
+  # check panel
+  nonF1_df <- patient_data %>% 
+    filter(Panel_name != "FoundationOne CDx")
+  
+  if (nrow(nonF1_df) >0){
+    print(organ)
+    nonF1_df %>% 
+      select(panel_name, Tumor_Sample_Barcode) %>% 
+      unique() %>% 
+      print()
+    stop("There are non-FoundationOne data.")
+  }
+  
+  # panel selection
+  nonF1_path <- paste0("result/table/prep/report/", organ, "/non_FoundationOne_data.csv")
+  
+  if (file.exists(nonF1_path)){
+    tmp <- read_csv(nonF1_path)
+    patient_data <- patient_data %>% 
+      filter(!Tumor_Sample_Barcode %in% tmp$Tumor_Sample_Barcode)
+    double_multiple_data <- double_multiple_data %>%
+      filter(!Tumor_Sample_Barcode %in% tmp$Tumor_Sample_Barcode)
+    FH_data <- FH_data %>%
+      filter(!Tumor_Sample_Barcode %in% tmp$Tumor_Sample_Barcode)
+    metastasis_data <- metastasis_data %>%
+      filter(!Tumor_Sample_Barcode %in% tmp$Tumor_Sample_Barcode)
+    biomarker_data <- biomarker_data %>%
+      filter(!Tumor_Sample_Barcode %in% tmp$Tumor_Sample_Barcode)
+    pre_treatment_data <- pre_treatment_data %>%
+      filter(!Tumor_Sample_Barcode %in% tmp$Tumor_Sample_Barcode)
+    post_treatment_data <- post_treatment_data %>%
+      filter(!Tumor_Sample_Barcode %in% tmp$Tumor_Sample_Barcode)
+    prognosis_data <- prognosis_data %>%
+      filter(!Tumor_Sample_Barcode %in% tmp$Tumor_Sample_Barcode)
+  }
+  
+  # save as csv
+  patient_data %>% 
+    write_excel_csv(paste0("result/table/prep/case/", organ, "/patient_data.csv"), na = "")
+  double_multiple_data %>%
+    write_excel_csv(paste0("result/table/prep/case/", organ, "/double_multiple_data.csv"), na = "")
+  FH_data %>%
+    write_excel_csv(paste0("result/table/prep/case/", organ, "/FH_data.csv"), na = "")
+  metastasis_data %>%
+    write_excel_csv(paste0("result/table/prep/case/", organ, "/metastasis_data.csv"), na = "")
+  biomarker_data %>%
+    write_excel_csv(paste0("result/table/prep/case/", organ, "/biomarker_data.csv"), na = "")
+  pre_treatment_data %>%
+    write_excel_csv(paste0("result/table/prep/case/", organ, "/pre_treatment_data.csv"), na = "")
+  post_treatment_data %>%
+    write_excel_csv(paste0("result/table/prep/case/", organ, "/post_treatment_data.csv"), na = "")
+  prognosis_data %>%
+    write_excel_csv(paste0("result/table/prep/case/", organ, "/prognosis_data.csv"), na = "")
+}
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

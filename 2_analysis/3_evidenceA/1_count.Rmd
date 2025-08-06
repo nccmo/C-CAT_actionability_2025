@@ -1,0 +1,126 @@
+---
+title: "EvidenceA(approved) count"
+author: "Yuki Saito"
+date: "2024-04-18"
+output: html_document
+---
+
+- R markdown script to count level A (approved) alterations.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/evidence_A/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/evidence_A/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r read data}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "")
+
+# read in evidence A treatment data
+evidenceA_treatment_data <- read_csv("result/table/evidence_A/Evidence_A_data_by_alteration_with_treatment_and_response.csv", na = "")
+
+# approved only
+evidenceA_approved_treatment_data <- evidenceA_treatment_data %>% 
+  filter(Highest_evidence_level2 == "Evidence_A(approved)")
+```
+
+```{r basic count}
+# basic count
+tmp1 <- evidenceA_approved_treatment_data2 %>% 
+  count(Tumor_Sample_Barcode) %>% 
+  nrow()
+print("Number of cases with level A (approved)")
+print(tmp1)
+
+tmp2 <- evidenceA_approved_treatment_data2 %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  count(Tumor_Sample_Barcode) %>% 
+  nrow()
+print("Number of cases with regimen info available")
+print(tmp2)
+print(tmp2/tmp1*100)
+```
+
+```{r evidence A approved count}
+get_last_non_empty <- function(x) {
+  non_empty_elements <- x[x != ""]
+  return(tail(non_empty_elements, 1))
+}
+
+# Evidence A count
+count_df <- evidenceA_approved_treatment_data2 %>%
+  count(Evidence_A_class) %>%
+  arrange(desc(n)) %>%
+  mutate(Cancer_type = apply(str_split(Evidence_A_class, "_", simplify = TRUE), 1, get_last_non_empty)) %>% 
+  mutate(class = str_replace(str_replace(str_extract(Evidence_A_class, "_[a-z0-9A-Z_]+_"), "^_", ""), "_$", "")) %>% 
+  mutate(class = if_else(is.na(class) | class == "high", "other", class)) %>% 
+  mutate(class = if_else(class %in% c("V600", "V600E"), "mutation", class))
+print(count_df)
+count_df %>%
+  write_excel_csv("result/table/analysis/evidence_A/Evidence_A(approved)_count.csv")
+
+#TMB-H fraction
+count_df %>% 
+  mutate(freq = n / sum(n))
+
+tmp1 <- evidenceA_approved_treatment_data2 %>% filter(Evidence_A_class == "TMB_high_PanCan") %>% count(Tumor_Sample_Barcode) %>% nrow()
+tmp2 <- evidenceA_approved_treatment_data2 %>% count(Tumor_Sample_Barcode) %>% nrow()
+tmp1
+tmp2
+tmp1/tmp2
+```
+
+```{r figure}
+fig1 <- count_df %>% 
+  filter(n >= 20) %>% 
+  ggplot() +
+  geom_bar(aes(x = reorder(Evidence_A_class, n), y = n, fill = Cancer_type), color = "black", stat = "identity") +
+  coord_flip() +
+  theme(axis.title.y = element_blank()) +
+  theme(axis.text.y = element_text(size = 8)) +
+  ylab("Number of cases") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 2400)) +
+  theme(legend.position = "none")
+print(fig1)
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_count_colored_by_cancertype.pdf", width = 5, height = 6)
+
+fig2 <- count_df %>% 
+  filter(n >= 20) %>% 
+  ggplot() +
+  geom_bar(aes(x = reorder(Evidence_A_class, n), y = n, fill = class), color = "black", stat = "identity") +
+  coord_flip() +
+  theme(axis.title.y = element_blank()) +
+  theme(axis.text.y = element_text(size = 8)) +
+  ylab("Number of cases") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 2400))
+print(fig2)
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_count_colored_by_class.pdf", width = 5, height = 6)
+ggsave("result/pdf/analysis/evidence_A/Evidence_A(approved)_count_colored_by_class_nolegend.pdf", width = 5, height = 6, 
+       fig2 + theme(legend.position = "none"))
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

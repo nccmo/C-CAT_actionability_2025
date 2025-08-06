@@ -1,0 +1,162 @@
+---
+title: "prognosis by previous regimen numbers"
+author: "Yuki Saito"
+date: "2024-09-24"
+output: html_document
+---
+
+- R markdown script to evaluate prognosis by the number of previous regimens.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(ggsurvfit)
+library(gtsummary)
+library(survival)
+library(survminer)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/figure.R")
+source("../../R/utils.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r read in pre treatment data, warning=FALSE, message=FALSE}
+pre_treatment_data <- read_csv("result/table/merged/merged_pre_treatment_data.csv")
+pre_treatment_data
+
+pre_treatment_data2 <- pre_treatment_data %>% 
+  filter(!is.na(PreEP_regimen_regimen) |
+           !is.na(PreEP_regimen_drug_JP) |
+           !is.na(PreEP_regimen_drug_EN) |
+           !is.na(PreEP_regimen_drug_input) |
+           !is.na(PreEP_regimen_drug_input_product) |
+           !is.na(PreEP_regimen_status) |
+           !is.na(PreEP_regimen_status_name)) %>% 
+  select(Tumor_Sample_Barcode,
+         `PreEP_regimen_Treatment line`,
+         `PreEP_regimen_Treatment line_name`,
+         PreEP_regimen_purpose,
+         PreEP_regimen_purpose_name,
+         PreEP_regimen_regimen,
+         PreEP_regimen_startdate,
+         PreEP_regimen_enddate) %>% 
+  unique()
+pre_treatment_data2
+
+pre_treatment_data3 <- pre_treatment_data2 %>% 
+  filter(!is.na(`PreEP_regimen_Treatment line`) |
+           !is.na(PreEP_regimen_purpose) | 
+           !is.na(PreEP_regimen_purpose_name) | 
+           !is.na(PreEP_regimen_regimen) |
+           !is.na(PreEP_regimen_startdate) | 
+           !is.na(PreEP_regimen_enddate))
+pre_treatment_data3
+
+pre_treatment_data3 %>% 
+  filter(`PreEP_regimen_Treatment line` == 0)
+
+pre_treatment_data4 <- pre_treatment_data3 %>% 
+  filter(`PreEP_regimen_Treatment line` != 0)
+```
+
+```{r count regimen}
+pre_treatment_data4 %>% 
+  count(PreEP_regimen_purpose_name)
+
+num_df <- pre_treatment_data4 %>%
+  filter(PreEP_regimen_purpose_name %in% c("Mitigation", "Other", "Radical cure")) %>%
+  count(Tumor_Sample_Barcode) %>% 
+  rename(preEP_palliative_other_regimen_num = n)
+num_df
+
+num_df %>% 
+  count(preEP_palliative_other_regimen_num)
+```
+
+```{r read in merged data}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "")
+merged_data
+
+merged_data <- merged_data %>% 
+  left_join(num_df, by = "Tumor_Sample_Barcode") %>%
+  mutate(preEP_palliative_other_regimen_num = if_else(is.na(preEP_palliative_other_regimen_num), 0, preEP_palliative_other_regimen_num)) %>% 
+  mutate(preEP_palliative_other_regimen_num2 = if_else(preEP_palliative_other_regimen_num >= 2, "2-", as.character(preEP_palliative_other_regimen_num))) %>%
+  mutate(preEP_palliative_other_regimen_num2 = if_else(is.na(preEP_palliative_other_regimen_num2), "0", preEP_palliative_other_regimen_num2)) %>%
+  mutate(preEP_palliative_other_regimen_num2 = factor(preEP_palliative_other_regimen_num2, levels = c("0", "1", "2-")))
+
+merged_data %>% 
+  count(Pre_regimen_info_existence, preEP_palliative_other_regimen_num2)
+
+check <- merged_data %>% 
+  filter(Pre_regimen_info_existence == "No") %>% 
+  filter(preEP_palliative_other_regimen_num != "0")
+pre_treatment_data %>% 
+  filter(Tumor_Sample_Barcode %in% check$Tumor_Sample_Barcode)
+check
+
+merged_data <- merged_data %>% 
+  mutate(preEP_palliative_other_regimen_num3 = case_when(Pre_regimen_info_existence == "No" ~ "0 (No pre-CGP)",
+                                                         Pre_regimen_info_existence == "Yes" & preEP_palliative_other_regimen_num2 == "0" ~ "0 (with NAC/adj)",
+                                                         TRUE ~ preEP_palliative_other_regimen_num2)) %>% 
+  mutate(preEP_palliative_other_regimen_num3 = factor(preEP_palliative_other_regimen_num3,
+                                                      levels = c("0 (No pre-CGP)", "0 (with NAC/adj)", "1", "2-"))) %>% 
+  mutate(preEP_palliative_other_regimen_num4 = if_else(preEP_palliative_other_regimen_num3 %in% c("0 (with NAC/adj)", "1"), "0-1",
+                                                       preEP_palliative_other_regimen_num3)) %>% 
+  mutate(preEP_palliative_other_regimen_num4 = factor(preEP_palliative_other_regimen_num4,
+                                                      levels = c("0-1", "2-", "0 (No pre-CGP)")))
+
+merged_data %>% 
+  count(Pre_regimen_info_existence, preEP_palliative_other_regimen_num, preEP_palliative_other_regimen_num2, preEP_palliative_other_regimen_num3, preEP_palliative_other_regimen_num4)
+merged_data %>% 
+  count(preEP_palliative_other_regimen_num2, preEP_palliative_other_regimen_num3, preEP_palliative_other_regimen_num4)
+
+merged_data <- merged_data %>%
+  mutate(Age_category = case_when(Age < 65 ~ "<65",
+                                  Age >= 65 & Age < 75 ~ "65-74",
+                                  Age >= 75 ~ ">=75")) %>%
+  mutate(Age_category = factor(Age_category, levels = c("<65", "65-74", ">=75"))) %>% 
+  mutate(Sex_name = if_else(Sex == 9, NA_character_, Sex_name))
+```
+
+```{r figure}
+merged_data2 <- merged_data %>% 
+  filter(preEP_palliative_other_regimen_num4 != "0 (No pre-CGP)")
+  
+count <- survdiff(Surv(OS_time_from_CGP, OS)~ preEP_palliative_other_regimen_num4, data = merged_data2)
+print(count)
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ preEP_palliative_other_regimen_num4 + Sex_name + Age_category, data = merged_data2))
+print(stat)
+stat$coefficients
+
+fig <- ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ preEP_palliative_other_regimen_num4, data = merged_data2), size = 1.5) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 4),
+                  ylim = c(0, 1)) +
+  labs(x = "Years",
+       y = "Probability of Overall Survival",
+       subtitle = "By regimen number before CGP (palliative + other)") +
+  ggtitle("PanCan") +
+  cowplot::theme_cowplot()
+print(fig)
+ggsave("result/pdf/analysis/overall_prognosis/OS_by_regimen_number.pdf")
+print(fig + theme(legend.position = "none"))
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

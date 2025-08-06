@@ -1,0 +1,261 @@
+---
+title: "Prognosis"
+author: "Yuki Saito"
+output: html_document
+date: "2024-03-21"
+---
+
+- R markdown script to evaluate prognosis by tumor type-specific biomarkers.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+library(stringi)
+library(ggsurvfit)
+library(gtsummary)
+library(survival)
+library(survminer)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/automatic_annotation.R")
+```
+
+```{r directory}
+dir.create("result/table/analysis/prognosis_by_alterations/", showWarnings = FALSE)
+dir.create("result/pdf/analysis/prognosis_by_alterations/", showWarnings = FALSE)
+```
+
+```{r read data}
+merged_data <- read_csv("result/table/merged/merged_patient_data11.csv", na = "")
+evidenceA_data <- read_csv("result/table/evidence_A/Evidence_A_data_by_alteration_with_treatment.csv") 
+biomarker_data <- read_csv("result/table/analysis/companion/biomarker_data.csv", na = "") %>% 
+  select(-TMB)
+```
+
+```{r BRCA prostate, message=FALSE, warning=FALSE, error=FALSE}
+pre_df <- read_csv("result/table/analysis/prognosis_by_alterations/Prostate_BRCA_pre_treatment_data_automatic_annotation.csv", na = "")
+
+rowname_index <- which(colnames(pre_df) == "rowname")
+pre_df_strict <- pre_df %>% 
+  select(ends_with("_Strict")) %>% 
+  mutate(PreEP_automatic_strict = apply(., 1, function(row) {
+    paste(na.omit(row), collapse = ", ")
+  })) %>% 
+  mutate(PreEP_automatic_strict = if_else(PreEP_automatic_strict == "", NA_character_, PreEP_automatic_strict))
+
+pre_df <- pre_df %>%
+  mutate(PreEP_automatic_lenient = apply(pre_df[, (rowname_index + 1):ncol(pre_df)], 1, function(row) {
+    paste(na.omit(row), collapse = ", ")
+  })) %>% 
+  mutate(PreEP_automatic_lenient = if_else(PreEP_automatic_lenient == "", NA_character_, PreEP_automatic_lenient))
+pre_df <- pre_df %>% 
+  mutate(PreEP_automatic_strict = pre_df_strict$PreEP_automatic_strict)
+
+# pre analysis
+pre_treatment_samples <- pre_df %>% 
+  filter(!is.na(PreEP_automatic_strict)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_strict) %>% 
+  unique() %>% 
+  group_by(Tumor_Sample_Barcode) %>% 
+  summarise(PreEP_automatic_strict = paste(PreEP_automatic_strict, collapse = ", "))
+pre_treatment_samples2 <- pre_df %>%
+  filter(!is.na(PreEP_automatic_lenient)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_lenient) %>%
+  unique() %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(PreEP_automatic_lenient = paste(PreEP_automatic_lenient, collapse = ", "))
+
+pre_treatment_samples_with_response <- pre_df %>% 
+  filter(!is.na(PreEP_automatic_strict)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_strict, PreEP_regimen_best_response_name, PreEP_regimen_startdate) %>% 
+  unique() %>% 
+  group_by(Tumor_Sample_Barcode) %>% 
+  summarise(PreEP_automatic_strict = paste(PreEP_automatic_strict, collapse = ", "),
+            PreEP_automatic_strict_best_response_name = paste(PreEP_regimen_best_response_name, collapse = ", "),
+            PreEP_regimen_startdate = paste(PreEP_regimen_startdate, collapse = ", "))
+pre_treatment_samples2_with_response <- pre_df %>%
+  filter(!is.na(PreEP_automatic_lenient)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_lenient, PreEP_regimen_best_response_name, PreEP_regimen_startdate) %>%
+  unique() %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(PreEP_automatic_lenient = paste(PreEP_automatic_lenient, collapse = ", "),
+            PreEP_automatic_lenient_best_response_name = paste(PreEP_regimen_best_response_name, collapse = ", "),
+            PreEP_regimen_startdate = paste(PreEP_regimen_startdate, collapse = ", "))
+
+pre_treatment_samples2_with_response <- pre_treatment_samples2_with_response %>% 
+  rename(PreEP_TRK = PreEP_automatic_lenient,
+         PreEP_TRK_best_response = PreEP_automatic_lenient_best_response_name,
+         PreEP_TRK_startdate = PreEP_regimen_startdate)
+
+tmp_merged_data <- merged_data %>% 
+  filter(ONCOTREE_Level1 == "Prostate") %>% 
+  left_join2(pre_treatment_samples2)
+
+tmp_evidenceA_data <- evidenceA_data %>% 
+  filter(Evidence_A_class == "BRCA12_mutationloss_Prostate")
+
+tmp_merged_data2 <- tmp_merged_data %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  mutate(alteration = if_else(Tumor_Sample_Barcode %in% tmp_evidenceA_data$Tumor_Sample_Barcode, "Yes", "No")) %>% 
+  mutate(Age_category = case_when(Age < 65 ~ "<65",
+                                  Age >= 65 & Age < 75 ~ "65-74",
+                                  Age >= 75 ~ ">=75")) %>%
+  mutate(Age_category = factor(Age_category, levels = c("<65", "65-74", ">=75"))) %>% 
+  mutate(Sex_name = if_else(Sex == 9, NA_character_, Sex_name))
+
+tmp_merged_data3 <- tmp_merged_data2 %>% 
+  filter(is.na(PreEP_automatic_lenient))
+
+print("Treatment-naive cases")
+count <- survdiff(Surv(OS_time_from_CGP, OS) ~ alteration, data = tmp_merged_data3)
+print(count)
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS) ~ alteration + Sex_name + Age_category, data = tmp_merged_data3))
+print(stat)
+
+fig <- ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ alteration, data = tmp_merged_data3), size = 1) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 2),
+                  ylim = c(0, 1)) +
+  labs(x = "Years",
+       y = "Probability of overall survival",
+       subtitle = "Treatment-naive cases",
+       caption = str_c("P =", stat$coefficients[,"Pr(>|z|)"], "\n",
+                       "unmutated_num =", count$n[["alteration=No"]], "\n",
+                       "mutated_num =", count$n[["alteration=Yes"]],  "\n",
+                       "HR = ", stat$coefficients[,"exp(coef)"])
+  ) +
+  ggtitle("BRCA1/2 mutation loss: Prostate") +
+  scale_color_manual(values = c("Yes" = "#EFC000FF",
+                                "No" = "#0073C2FF")) + 
+  cowplot::theme_cowplot()
+print(fig)
+ggsave("result/pdf/analysis/prognosis_by_alterations/OS_by_Prostate_BRCA12_mutationloss.pdf")
+
+companion_data <- tmp_merged_data3 %>% 
+  left_join2(biomarker_data, by = "Tumor_Sample_Barcode") %>% 
+  filter(alteration == "Yes") %>% 
+  count(Prostate_gBRCA1_name, Prostate_gBRCA2_name) %>% 
+  mutate(freq = n / sum(n))
+print(companion_data)
+companion_data %>% 
+  write_csv("result/table/analysis/prognosis_by_alterations/Prostate_BRCA_companion_data.csv", na = "")
+```
+
+```{r FGFR2 biliary tract, message=FALSE, warning=FALSE, error=FALSE}
+pre_df <- read_csv("result/table/analysis/prognosis_by_alterations/Biliary_tract_FGFR2_fusion_pre_treatment_data_automatic_annotation.csv", na = "")
+
+rowname_index <- which(colnames(pre_df) == "rowname")
+pre_df_strict <- pre_df %>% 
+  select(ends_with("_Strict")) %>% 
+  mutate(PreEP_automatic_strict = apply(., 1, function(row) {
+    paste(na.omit(row), collapse = ", ")
+  })) %>% 
+  mutate(PreEP_automatic_strict = if_else(PreEP_automatic_strict == "", NA_character_, PreEP_automatic_strict))
+
+pre_df <- pre_df %>%
+  mutate(PreEP_automatic_lenient = apply(pre_df[, (rowname_index + 1):ncol(pre_df)], 1, function(row) {
+    paste(na.omit(row), collapse = ", ")
+  })) %>% 
+  mutate(PreEP_automatic_lenient = if_else(PreEP_automatic_lenient == "", NA_character_, PreEP_automatic_lenient))
+pre_df <- pre_df %>% 
+  mutate(PreEP_automatic_strict = pre_df_strict$PreEP_automatic_strict)
+
+# pre analysis
+pre_treatment_samples <- pre_df %>% 
+  filter(!is.na(PreEP_automatic_strict)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_strict) %>% 
+  unique() %>% 
+  group_by(Tumor_Sample_Barcode) %>% 
+  summarise(PreEP_automatic_strict = paste(PreEP_automatic_strict, collapse = ", "))
+pre_treatment_samples2 <- pre_df %>%
+  filter(!is.na(PreEP_automatic_lenient)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_lenient) %>%
+  unique() %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(PreEP_automatic_lenient = paste(PreEP_automatic_lenient, collapse = ", "))
+
+pre_treatment_samples_with_response <- pre_df %>% 
+  filter(!is.na(PreEP_automatic_strict)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_strict, PreEP_regimen_best_response_name, PreEP_regimen_startdate) %>% 
+  unique() %>% 
+  group_by(Tumor_Sample_Barcode) %>% 
+  summarise(PreEP_automatic_strict = paste(PreEP_automatic_strict, collapse = ", "),
+            PreEP_automatic_strict_best_response_name = paste(PreEP_regimen_best_response_name, collapse = ", "),
+            PreEP_regimen_startdate = paste(PreEP_regimen_startdate, collapse = ", "))
+pre_treatment_samples2_with_response <- pre_df %>%
+  filter(!is.na(PreEP_automatic_lenient)) %>% 
+  select(Tumor_Sample_Barcode, PreEP_automatic_lenient, PreEP_regimen_best_response_name, PreEP_regimen_startdate) %>%
+  unique() %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(PreEP_automatic_lenient = paste(PreEP_automatic_lenient, collapse = ", "),
+            PreEP_automatic_lenient_best_response_name = paste(PreEP_regimen_best_response_name, collapse = ", "),
+            PreEP_regimen_startdate = paste(PreEP_regimen_startdate, collapse = ", "))
+
+pre_treatment_samples2_with_response <- pre_treatment_samples2_with_response %>% 
+  rename(PreEP_TRK = PreEP_automatic_lenient,
+         PreEP_TRK_best_response = PreEP_automatic_lenient_best_response_name,
+         PreEP_TRK_startdate = PreEP_regimen_startdate)
+
+tmp_merged_data <- merged_data %>% 
+  filter(ONCOTREE_Level1 == "Biliary tract") %>% 
+  left_join2(pre_treatment_samples2)
+
+tmp_evidenceA_data <- evidenceA_data %>% 
+  filter(Evidence_A_class == "FGFR2_fusion_Cholangiocarcinoma")
+
+tmp_merged_data2 <- tmp_merged_data %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  mutate(alteration = if_else(Tumor_Sample_Barcode %in% tmp_evidenceA_data$Tumor_Sample_Barcode, "Yes", "No")) %>%
+  mutate(Age_category = case_when(Age < 65 ~ "<65",
+                                  Age >= 65 & Age < 75 ~ "65-74",
+                                  Age >= 75 ~ ">=75")) %>%
+  mutate(Age_category = factor(Age_category, levels = c("<65", "65-74", ">=75"))) %>% 
+  mutate(Sex_name = if_else(Sex == 9, NA_character_, Sex_name))
+
+tmp_merged_data3 <- tmp_merged_data2 %>% 
+  filter(is.na(PreEP_automatic_lenient))
+
+print("Treatment-naive cases")
+count <- survdiff(Surv(OS_time_from_CGP, OS) ~ alteration, data = tmp_merged_data3)
+print(count)
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS) ~ alteration + Sex_name + Age_category, data = tmp_merged_data3))
+print(stat)
+
+fig <- ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ alteration, data = tmp_merged_data3), size = 1) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 2),
+                  ylim = c(0, 1)) +
+  labs(x = "Years",
+       y = "Probability of overall survival",
+       subtitle = "Treatment-naive cases",
+       caption = str_c("P =", stat$coefficients[,"Pr(>|z|)"], "\n",
+                       "unmutated_num =", count$n[["alteration=No"]], "\n",
+                       "mutated_num =", count$n[["alteration=Yes"]],  "\n",
+                       "HR = ", stat$coefficients[,"exp(coef)"])
+  ) +
+  ggtitle("FGFR2 fusion: Cholangiocarcinoma") +
+  scale_color_manual(values = c("Yes" = "#EFC000FF",
+                                "No" = "#0073C2FF")) + 
+  cowplot::theme_cowplot()
+print(fig) 
+ggsave("result/pdf/analysis/prognosis_by_alterations/OS_by_biliary_tract_FGFR2_fusion.pdf")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

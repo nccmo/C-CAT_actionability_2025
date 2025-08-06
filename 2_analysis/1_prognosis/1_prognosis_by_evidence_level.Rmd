@@ -1,0 +1,394 @@
+---
+title: "Prognosis by evidence level"
+author: "Yuki Saito"
+date: "2024-09-18"
+output: html_document
+---
+
+- R markdown script to evaluate prognosis by evidence level.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(ggsurvfit)
+library(gtsummary)
+library(survival)
+library(survminer)
+```
+
+```{r make directory, message=FALSE, warning=FALSE}
+# make directory
+dir.create("result/pdf/analysis/overall_prognosis/", showWarnings = FALSE)
+dir.create("result/table/analysis/overall_prognosis/", showWarnings = FALSE)
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r read in merged data, warning=FALSE, message=FALSE}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "") %>%
+  mutate(Highest_evidence_level3 = if_else(Highest_evidence_level2 %in% c("Evidence_A(approved)", "Evidence_A(unapproved)", "Evidence_B", "No_evidence"), 
+                                           Highest_evidence_level2,
+                                           "Evidence_CDE")) %>% 
+  mutate(Highest_evidence_level3 = factor(Highest_evidence_level3,
+                                          levels = c("Evidence_CDE", "Evidence_A(approved)", "Evidence_A(unapproved)", "Evidence_B", "No_evidence"))) %>% 
+  mutate(Age_category = case_when(Age < 65 ~ "<65",
+                                  Age >= 65 & Age < 75 ~ "65-74",
+                                  Age >= 75 ~ ">=75")) %>%
+  mutate(Age_category = factor(Age_category, levels = c("<65", "65-74", ">=75"))) %>% 
+  mutate(Sex_name = if_else(Sex == 9, NA_character_, Sex_name))
+
+merged_data %>% 
+  count(Highest_evidence_level, Highest_evidence_level2, Highest_evidence_level3)
+
+merged_data %>%
+  count(Sex)
+merged_data %>% 
+  count(Age_category)
+```
+
+```{r function}
+get_summary_value <- function(fit_summary_table, group_name, column_name) {
+  if (!group_name %in% rownames(fit_summary_table)) {
+    return("N/A")
+  }
+  value <- fit_summary_table[group_name, column_name]
+  
+  if (is.na(value)) {
+    return("N/R")
+  }
+  return(value)
+}
+
+convert_to_months <- function(value) {
+  if (is.numeric(value)) {
+    return(as.character(value * 12))
+  }
+  return(value)
+}
+```
+
+```{r pan cancer}
+count <- survdiff(Surv(OS_time_from_CGP, OS) ~ Highest_evidence_level3, data = merged_data)
+print(count)
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ Highest_evidence_level3 + Sex_name + Age_category, data = merged_data))
+print(stat)
+stat$conf.int
+stat$coefficients
+
+fit <- survfit2(Surv(OS_time_from_CGP, OS) ~ Highest_evidence_level3, data = merged_data)
+print(fit)
+fit_overall <- survfit2(Surv(OS_time_from_CGP, OS) ~ 1, data = merged_data)
+print(fit_overall)
+
+fit_summary <- summary(fit)$table
+fit_overall_summary <- summary(fit_overall)$table
+
+stat_df <- tibble(Oncotree_CODE_Final_wide = "PanCan",
+                  
+                  # All
+                  all_num = fit_overall$n,
+                  all_median_os = convert_to_months(ifelse(is.na(fit_overall_summary["median"]), "N/R", fit_overall_summary["median"])),
+                  all_lower95_os = convert_to_months(ifelse(is.na(fit_overall_summary["0.95LCL"]), "N/R", fit_overall_summary["0.95LCL"])),
+                  all_higher95_os = convert_to_months(ifelse(is.na(fit_overall_summary["0.95UCL"]), "N/R", fit_overall_summary["0.95UCL"])),
+                  
+                  # Evidence C-E
+                  cde_num = ifelse("Highest_evidence_level3=Evidence_CDE" %in% names(count$n), count$n[["Highest_evidence_level3=Evidence_CDE"]], 0),
+                  cde_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_CDE", "median")),
+                  cde_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_CDE", "0.95LCL")),
+                  cde_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_CDE", "0.95UCL")),
+                  
+                  # Evidence A (approved)
+                  aapproved_num = ifelse("Highest_evidence_level3=Evidence_A(approved)" %in% names(count$n), count$n[["Highest_evidence_level3=Evidence_A(approved)"]], 0),
+                  aapproved_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(approved)", "median")),
+                  aapproved_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(approved)", "0.95LCL")),
+                  aapproved_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(approved)", "0.95UCL")),
+                  aapproved_hazard_ratio = ifelse("Highest_evidence_level3Evidence_A(approved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(approved)", "exp(coef)"], NA),
+                  aapproved_lower95 = ifelse("Highest_evidence_level3Evidence_A(approved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(approved)", "lower .95"], NA),
+                  aapproved_higher95 = ifelse("Highest_evidence_level3Evidence_A(approved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(approved)", "upper .95"], NA),
+                  aapproved_wald_p = ifelse("Highest_evidence_level3Evidence_A(approved)" %in% rownames(stat$coefficients), stat$coefficients["Highest_evidence_level3Evidence_A(approved)", "Pr(>|z|)"], NA),
+                  
+                  # Evidence A (unapproved)
+                  aunapproved_num = ifelse("Highest_evidence_level3=Evidence_A(unapproved)" %in% names(count$n), count$n[["Highest_evidence_level3=Evidence_A(unapproved)"]], 0),
+                  aunapproved_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(unapproved)", "median")),
+                  aunapproved_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(unapproved)", "0.95LCL")),
+                  aunapproved_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(unapproved)", "0.95UCL")),
+                  aunapproved_hazard_ratio = ifelse("Highest_evidence_level3Evidence_A(unapproved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(unapproved)", "exp(coef)"], NA),
+                  aunapproved_lower95 = ifelse("Highest_evidence_level3Evidence_A(unapproved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(unapproved)", "lower .95"], NA),
+                  aunapproved_higher95 = ifelse("Highest_evidence_level3Evidence_A(unapproved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(unapproved)", "upper .95"], NA),
+                  aunapproved_wald_p = ifelse("Highest_evidence_level3Evidence_A(unapproved)" %in% rownames(stat$coefficients), stat$coefficients["Highest_evidence_level3Evidence_A(unapproved)", "Pr(>|z|)"], NA),
+                  
+                  # Evidence B
+                  b_num = ifelse("Highest_evidence_level3=Evidence_B" %in% names(count$n), count$n[["Highest_evidence_level3=Evidence_B"]], 0),
+                  b_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_B", "median")),
+                  b_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_B", "0.95LCL")),
+                  b_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_B", "0.95UCL")),
+                  b_hazard_ratio = ifelse("Highest_evidence_level3Evidence_B" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_B", "exp(coef)"], NA),
+                  b_lower95 = ifelse("Highest_evidence_level3Evidence_B" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_B", "lower .95"], NA),
+                  b_higher95 = ifelse("Highest_evidence_level3Evidence_B" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_B", "upper .95"], NA),
+                  b_wald_p = ifelse("Highest_evidence_level3Evidence_B" %in% rownames(stat$coefficients), stat$coefficients["Highest_evidence_level3Evidence_B", "Pr(>|z|)"], NA),
+                  
+                  # No evidence
+                  no_num = ifelse("Highest_evidence_level3=No_evidence" %in% names(count$n), count$n[["Highest_evidence_level3=No_evidence"]], 0),
+                  no_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=No_evidence", "median")),
+                  no_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=No_evidence", "0.95LCL")),
+                  no_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=No_evidence", "0.95UCL")),
+                  no_hazard_ratio = ifelse("Highest_evidence_level3No_evidence" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3No_evidence", "exp(coef)"], NA),
+                  no_lower95 = ifelse("Highest_evidence_level3No_evidence" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3No_evidence", "lower .95"], NA),
+                  no_higher95 = ifelse("Highest_evidence_level3No_evidence" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3No_evidence", "upper .95"], NA),
+                  no_wald_p = ifelse("Highest_evidence_level3No_evidence" %in% rownames(stat$coefficients), stat$coefficients["Highest_evidence_level3No_evidence", "Pr(>|z|)"], NA)
+                  )
+
+fig <- ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ Highest_evidence_level3, data = merged_data), size = 1) +
+  #add_censor_mark(size = 0.5) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 4),
+                  ylim = c(0, 1)) +
+  labs(x = "Years",
+       y = "Probability of overall survival") +
+  ggtitle("PanCan") + 
+  scale_color_manual(
+    name = "Highest evidence level",
+    values = c(
+      "No_evidence" = "gray60",
+      "Evidence_CDE" = "#3C7BAFFF",
+      "Evidence_B" = "#00A087FF",
+      "Evidence_A(unapproved)" = "pink",
+      "Evidence_A(approved)" = "#E64B35FF"
+    )) +
+  cowplot::theme_cowplot()
+print(fig)
+ggsave("result/pdf/analysis/overall_prognosis/OS_by_highest_evidence_level_CDEcombined.pdf", width = 8, fig)
+ggsave("result/pdf/analysis/overall_prognosis/OS_by_highest_evidence_level_CDEcombined_no_legend.pdf", width = 8, fig + theme(legend.position = "none"))
+ggsave("result/pdf/analysis/overall_prognosis/OS_by_highest_evidence_level_CDEcombined_risktable.pdf", width = 8, fig + add_risktable())
+```
+
+```{r each cancer type}
+plot_list <- list()
+
+for (tmp_cancer_type in wide_cancer_order) {
+  tmp_data <- merged_data %>% filter(Oncotree_CODE_Final_wide == tmp_cancer_type)
+  print(tmp_cancer_type)
+  
+  count <- survdiff(Surv(OS_time_from_CGP, OS) ~ Highest_evidence_level3, data = tmp_data)
+  print(count)
+  
+  if (tmp_data %>% count(Sex_name) %>% nrow() == 1){
+    stat <- summary(coxph(Surv(OS_time_from_CGP, OS) ~ Highest_evidence_level3 + Age_category, data = tmp_data))
+  } else{
+    stat <- summary(coxph(Surv(OS_time_from_CGP, OS) ~ Highest_evidence_level3 + Sex_name + Age_category, data = tmp_data))
+  }
+  print(stat)
+  fit <- survfit2(Surv(OS_time_from_CGP, OS) ~ Highest_evidence_level3, data = tmp_data)
+  print(fit)
+  fit_overall <- survfit2(Surv(OS_time_from_CGP, OS) ~ 1, data = tmp_data)
+  print(fit_overall)
+  
+  fit_summary <- summary(fit)$table
+  fit_overall_summary <- summary(fit_overall)$table
+  
+  tmp_stat_df <- tibble(
+    Oncotree_CODE_Final_wide = tmp_cancer_type,
+    
+    # All
+    all_num = fit_overall$n,
+    all_median_os = convert_to_months(ifelse(is.na(fit_overall_summary["median"]), "N/R", fit_overall_summary["median"])),
+    all_lower95_os = convert_to_months(ifelse(is.na(fit_overall_summary["0.95LCL"]), "N/R", fit_overall_summary["0.95LCL"])),
+    all_higher95_os = convert_to_months(ifelse(is.na(fit_overall_summary["0.95UCL"]), "N/R", fit_overall_summary["0.95UCL"])),
+    
+    # Evidence C-E
+    cde_num = ifelse("Highest_evidence_level3=Evidence_CDE" %in% names(count$n), count$n[["Highest_evidence_level3=Evidence_CDE"]], 0),
+    cde_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_CDE", "median")),
+    cde_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_CDE", "0.95LCL")),
+    cde_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_CDE", "0.95UCL")),
+    
+    # Evidence A (approved)
+    aapproved_num = ifelse("Highest_evidence_level3=Evidence_A(approved)" %in% names(count$n), count$n[["Highest_evidence_level3=Evidence_A(approved)"]], 0),
+    aapproved_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(approved)", "median")),
+    aapproved_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(approved)", "0.95LCL")),
+    aapproved_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(approved)", "0.95UCL")),
+    aapproved_hazard_ratio = ifelse("Highest_evidence_level3Evidence_A(approved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(approved)", "exp(coef)"], NA),
+    aapproved_lower95 = ifelse("Highest_evidence_level3Evidence_A(approved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(approved)", "lower .95"], NA),
+    aapproved_higher95 = ifelse("Highest_evidence_level3Evidence_A(approved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(approved)", "upper .95"], NA),
+    aapproved_wald_p = ifelse("Highest_evidence_level3Evidence_A(approved)" %in% rownames(stat$coefficients), stat$coefficients["Highest_evidence_level3Evidence_A(approved)", "Pr(>|z|)"], NA),
+    
+    # Evidence A (unapproved)
+    aunapproved_num = ifelse("Highest_evidence_level3=Evidence_A(unapproved)" %in% names(count$n), count$n[["Highest_evidence_level3=Evidence_A(unapproved)"]], 0),
+    aunapproved_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(unapproved)", "median")),
+    aunapproved_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(unapproved)", "0.95LCL")),
+    aunapproved_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_A(unapproved)", "0.95UCL")),
+    aunapproved_hazard_ratio = ifelse("Highest_evidence_level3Evidence_A(unapproved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(unapproved)", "exp(coef)"], NA),
+    aunapproved_lower95 = ifelse("Highest_evidence_level3Evidence_A(unapproved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(unapproved)", "lower .95"], NA),
+    aunapproved_higher95 = ifelse("Highest_evidence_level3Evidence_A(unapproved)" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_A(unapproved)", "upper .95"], NA),
+    aunapproved_wald_p = ifelse("Highest_evidence_level3Evidence_A(unapproved)" %in% rownames(stat$coefficients), stat$coefficients["Highest_evidence_level3Evidence_A(unapproved)", "Pr(>|z|)"], NA),
+    
+    # Evidence B
+    b_num = ifelse("Highest_evidence_level3=Evidence_B" %in% names(count$n), count$n[["Highest_evidence_level3=Evidence_B"]], 0),
+    b_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_B", "median")),
+    b_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_B", "0.95LCL")),
+    b_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=Evidence_B", "0.95UCL")),
+    b_hazard_ratio = ifelse("Highest_evidence_level3Evidence_B" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_B", "exp(coef)"], NA),
+    b_lower95 = ifelse("Highest_evidence_level3Evidence_B" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_B", "lower .95"], NA),
+    b_higher95 = ifelse("Highest_evidence_level3Evidence_B" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3Evidence_B", "upper .95"], NA),
+    b_wald_p = ifelse("Highest_evidence_level3Evidence_B" %in% rownames(stat$coefficients), stat$coefficients["Highest_evidence_level3Evidence_B", "Pr(>|z|)"], NA),
+    
+    # No evidence
+    no_num = ifelse("Highest_evidence_level3=No_evidence" %in% names(count$n), count$n[["Highest_evidence_level3=No_evidence"]], 0),
+    no_median_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=No_evidence", "median")),
+    no_lower95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=No_evidence", "0.95LCL")),
+    no_higher95_os = convert_to_months(get_summary_value(fit_summary, "Highest_evidence_level3=No_evidence", "0.95UCL")),
+    no_hazard_ratio = ifelse("Highest_evidence_level3No_evidence" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3No_evidence", "exp(coef)"], NA),
+    no_lower95 = ifelse("Highest_evidence_level3No_evidence" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3No_evidence", "lower .95"], NA),
+    no_higher95 = ifelse("Highest_evidence_level3No_evidence" %in% rownames(stat$conf.int), stat$conf.int["Highest_evidence_level3No_evidence", "upper .95"], NA),
+    no_wald_p = ifelse("Highest_evidence_level3No_evidence" %in% rownames(stat$coefficients), stat$coefficients["Highest_evidence_level3No_evidence", "Pr(>|z|)"], NA)
+  )
+  stat_df <- bind_rows(stat_df, tmp_stat_df)
+  
+  fig <- ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ Highest_evidence_level3, data = tmp_data), size = 1) +
+    geom_text(data = data.frame(x = 0.5, y = 0.25, label = paste0(
+      "Level A (approved), n = ", tmp_stat_df$aapproved_num, "\n",
+      "Level A (unapproved), n = ", tmp_stat_df$aunapproved_num, "\n",
+      "Level B, n = ", tmp_stat_df$b_num, "\n",
+      "Level C-E, n = ", tmp_stat_df$cde_num, "\n",
+      "No evidence, n = ", tmp_stat_df$no_num
+    )), 
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE) +
+    #add_censor_mark(size = 0.5) +
+    coord_cartesian(xlim = c(0, 2), ylim = c(0, 1)) +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    labs(x = "Years", y = "Overall survival") +
+    ggtitle(tmp_cancer_type) + 
+    scale_color_manual(
+      name = "Highest evidence level",
+      values = c(
+        "No_evidence" = "gray60",
+        "Evidence_CDE" = "#3C7BAFFF",
+        "Evidence_B" = "#00A087FF",
+        "Evidence_A(unapproved)" = "pink",
+        "Evidence_A(approved)" = "#E64B35FF"
+      )) +
+    cowplot::theme_cowplot()
+  print(fig)
+  
+  plot_list[[tmp_cancer_type]] <- fig
+}
+
+pdf("result/pdf/analysis/overall_prognosis/OS_by_highest_evidence_level_CDEcombined_cancertype.pdf", width = 8)
+plot_list
+dev.off()
+```
+
+```{r stat figure}
+# Evidence A (approved)
+stat_df %>% 
+  filter(aapproved_num >= 10) %>% 
+  mutate(sig = if_else(aapproved_wald_p < 0.05, "p < 0.05", "p >= 0.05")) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = c(wide_cancer_order, "PanCan"))) %>% 
+  ggplot() +
+  geom_point(aes(x = Oncotree_CODE_Final_wide, y = log2(aapproved_hazard_ratio), color = sig), size = 3) +
+  geom_errorbar(aes(x = Oncotree_CODE_Final_wide, ymin = log2(aapproved_lower95), ymax = log2(aapproved_higher95)), width = 0.2) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = -3.35, label = str_c("(", aapproved_num, ")")), size = 2) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 3.35, label = str_c("(", cde_num, ")")), size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Cancer Type", y = "log10(Hazard Ratio)") +
+  theme_minimal() +
+  coord_cartesian(ylim = c(-3.5, 3.5)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        axis.title.x = element_blank()) +
+  scale_color_manual(values = c("p < 0.05" = "red", 
+                                "p >= 0.05" = "black")) +
+  ggtitle("Evidence A (approved) vs Evidence C-E") +
+  theme(legend.position = "none")
+ggsave("result/pdf/analysis/overall_prognosis/Prognosis_Evidence_A_approved_vs_Evidence_C-E_multivariate.pdf")
+
+# Evidence A (unapproved)
+stat_df %>% 
+  filter(aunapproved_num >= 10) %>% 
+  mutate(sig = if_else(aunapproved_wald_p < 0.05, "p < 0.05", "p >= 0.05")) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = c(wide_cancer_order, "PanCan"))) %>%  
+  ggplot() +
+  geom_point(aes(x = Oncotree_CODE_Final_wide, y = log2(aunapproved_hazard_ratio), color = sig), size = 3) +
+  geom_errorbar(aes(x = Oncotree_CODE_Final_wide, ymin = log2(aunapproved_lower95), ymax = log2(aunapproved_higher95)), width = 0.2) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = -3.35, label = str_c("(", aunapproved_num, ")")), size = 2) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 3.35, label = str_c("(", cde_num, ")")), size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Cancer Type", y = "log10(Hazard Ratio)") +
+  theme_minimal() +
+  coord_cartesian(ylim = c(-3.5, 3.5)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        axis.title.x = element_blank()) +
+  scale_color_manual(values = c("p < 0.05" = "red", 
+                                "p >= 0.05" = "black")) +
+  ggtitle("Evidence A (unapproved) vs Evidence C-E") +
+  theme(legend.position = "none")
+ggsave("result/pdf/analysis/overall_prognosis/Prognosis_Evidence_A_unapproved_vs_Evidence_C-E_multivariate.pdf")
+
+# Evidence B
+stat_df %>% 
+  filter(b_num >= 10) %>% 
+  mutate(sig = if_else(b_wald_p < 0.05, "p < 0.05", "p >= 0.05")) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = c(wide_cancer_order, "PanCan"))) %>% 
+  ggplot() +
+  geom_point(aes(x = Oncotree_CODE_Final_wide, y = log2(b_hazard_ratio), color = sig), size = 3) +
+  geom_errorbar(aes(x = Oncotree_CODE_Final_wide, ymin = log2(b_lower95), ymax = log2(b_higher95)), width = 0.2) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = -3.35, label = str_c("(", b_num, ")")), size = 2) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 3.35, label = str_c("(", cde_num, ")")), size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Cancer Type", y = "log10(Hazard Ratio)") +
+  theme_minimal() +
+  coord_cartesian(ylim = c(-3.5, 3.5)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        axis.title.x = element_blank()) +
+  scale_color_manual(values = c("p < 0.05" = "red", 
+                                "p >= 0.05" = "black")) +
+  ggtitle("Evidence B vs Evidence C-E") +
+  theme(legend.position = "none")
+ggsave("result/pdf/analysis/overall_prognosis/Prognosis_Evidence_B_vs_Evidence_C-E_multivariate.pdf")
+
+# No evidence
+stat_df %>% 
+  filter(no_num >= 10) %>% 
+  mutate(sig = if_else(no_wald_p < 0.05, "p < 0.05", "p >= 0.05")) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = c(wide_cancer_order, "PanCan"))) %>% 
+  ggplot() +
+  geom_point(aes(x = Oncotree_CODE_Final_wide, y = log2(no_hazard_ratio), color = sig), size = 3) +
+  geom_errorbar(aes(x = Oncotree_CODE_Final_wide, ymin = log2(no_lower95), ymax = log2(no_higher95)), width = 0.2) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 3.35, label = str_c("(", no_num, ")")), size = 2) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = -3.35, label = str_c("(", cde_num, ")")), size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Cancer Type", y = "log10(Hazard Ratio)") +
+  theme_minimal() +
+  coord_cartesian(ylim = c(-3.5, 3.5)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        axis.title.x = element_blank()) +
+  scale_color_manual(values = c("p < 0.05" = "red", 
+                                "p >= 0.05" = "black")) +
+  ggtitle("No evidence vs Evidence C-E") +
+  theme(legend.position = "none")
+ggsave("result/pdf/analysis/overall_prognosis/Prognosis_No_evidence_vs_Evidence_C-E_multivariate.pdf")
+```
+
+```{r stat}
+# save
+stat_df %>% 
+  write_csv("result/table/analysis/overall_prognosis/OS_by_highest_evidence_level_CDEcombined_multivariate.csv", na = "N/A")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

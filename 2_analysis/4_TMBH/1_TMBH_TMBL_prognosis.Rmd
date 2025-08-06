@@ -1,0 +1,221 @@
+---
+title: "TMBH vs TMBL prognosis"
+author: "Yuki Saito"
+date: "2025-01-04"
+output: html_document
+---
+
+- R markdown script to evaluate prognosis by TMB status (TMB-H vs. TMB-L).
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(ggsurvfit)
+library(gtsummary)
+library(survival)
+library(survminer)
+library(scales)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/survival.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r read in merged data, warning=FALSE, message=FALSE}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "") %>% 
+  mutate(Age_category = case_when(Age < 65 ~ "<65",
+                                  Age >= 65 & Age < 75 ~ "65-74",
+                                  Age >= 75 ~ ">=75")) %>%
+  mutate(Age_category = factor(Age_category, levels = c("<65", "65-74", ">=75"))) %>% 
+  mutate(Sex_name = if_else(Sex == 9, NA_character_, Sex_name))
+merged_data
+```
+
+```{r selection of samples}
+nrow(merged_data)
+
+merged_data2 <- merged_data %>%
+  filter(!is.na(TMB_score_F1)) %>% # exclusion of samples in which TMB cannot be determined
+  filter(TMB_EvidenceA == "TMB_high" | TMB_score_F1 < 10) %>%
+  mutate(TMB_status = if_else(TMB_score_F1 >= 10, "TMB-High", "TMB-Low"))
+
+nrow(merged_data2)
+nrow(merged_data) - nrow(merged_data2)
+
+merged_data2 %>% 
+  count(TMB_status)
+```
+
+```{r exclusion of samples receiving ICI before CGP}
+merged_data3 <- merged_data2 %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(is.na(PreEP_ICI)) %>% 
+  mutate(TMB_status = factor(TMB_status, levels = c("TMB-Low", "TMB-High")))
+
+merged_data3 %>% 
+  count(TMB_status)
+```
+
+```{r pancancer}
+count <- survdiff(Surv(OS_time_from_CGP, OS)~ TMB_status, data = merged_data3) 
+print(count)
+stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ TMB_status + Sex_name + Age_category, data = merged_data3))
+print(stat)
+stat$coefficients
+
+stat_df <- tibble(Oncotree_CODE_Final_wide = "PanCan",
+                  TMBL_num = count$n[[1]],
+                  TMBH_num = count$n[[2]],
+                  hazard_ratio = stat$conf.int[1,1],
+                  lower95 = stat$conf.int[1,3],
+                  higher95 = stat$conf.int[1,4],
+                  wald_p = stat$coefficients[1,5])
+
+ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ TMB_status, data = merged_data3), size = 1.5) +
+  #add_censor_mark(size = 0.5) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 2),
+                  ylim = c(0, 1)) +
+  labs(x = "Years",
+       y = "Overall survival") +
+  ggtitle("PanCan") + 
+  scale_color_manual(
+    name = "TMB",
+    values = c(
+      "TMB-High" = "#810AC7", #"#9590FF",
+      "TMB-Low" = ggColorHue(3)[2] #"#9CCC5F"
+    )) +
+  cowplot::theme_cowplot() +
+  labs(caption = "Excluding ICI-treated cases")
+ggsave("result/pdf/analysis/TMBH/TMBH_vs_TMBL_prognosis_pancan.pdf")
+```
+
+```{r cancer type}
+order_df <- read_xlsx("ref/Oncotree_CODE_order.xlsx")
+
+plot_list <- list()
+for (tmp_cancer_type in order_df$Oncotree_CODE_Final_wide){
+  tmp_merged_data <- merged_data3 %>% 
+    filter(Oncotree_CODE_Final_wide == tmp_cancer_type) %>% 
+    filter(!is.na(OS))
+  
+  if (nrow(tmp_merged_data) < 10){
+    next()
+  }
+  if (tmp_merged_data %>% count(TMB_F1) %>% nrow() == 1){
+    next()
+  }
+  
+  count <- survdiff(Surv(OS_time_from_CGP, OS)~ TMB_status, data = tmp_merged_data) 
+  print(count)
+  
+  if (tmp_merged_data %>% count(Sex_name) %>% nrow() == 1){
+    stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ TMB_status + Age_category, data = tmp_merged_data))
+  } else{
+    stat <- summary(coxph(Surv(OS_time_from_CGP, OS)~ TMB_status + Sex_name + Age_category, data = tmp_merged_data))
+  }
+  print(stat)
+  print(stat$coefficients)
+  
+  stat_df <- bind_rows(stat_df,
+                       tibble(Oncotree_CODE_Final_wide = tmp_cancer_type,
+                              TMBL_num = count$n[[1]],
+                              TMBH_num = count$n[[2]],
+                              hazard_ratio = stat$conf.int[1,1],
+                              lower95 = stat$conf.int[1,3],
+                              higher95 = stat$conf.int[1,4],
+                              wald_p = stat$coefficients[1,5]))
+  
+  fig <- ggsurvfit(survfit2(Surv(OS_time_from_CGP, OS) ~ TMB_status, data = tmp_merged_data), size = 1.5) +
+    #add_censor_mark(size = 0.5) +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    coord_cartesian(xlim = c(0, 2),
+                    ylim = c(0, 1)) +
+    labs(x = "Years",
+         y = "Overall survival") +
+    ggtitle(tmp_cancer_type) + 
+    scale_color_manual(
+      name = "TMB",
+      values = c(
+        "TMB-High" = "#810AC7",
+        "TMB-Low" = ggColorHue(3)[2]
+      )) +
+    cowplot::theme_cowplot() +
+    labs(caption = "Excluding ICI-treated cases")
+  print(fig)
+  
+  plot_list[[tmp_cancer_type]] <- fig
+}
+
+pdf("result/pdf/analysis/TMBH/TMBH_vs_TMBL_prognosis_cancer_type.pdf")
+plot_list
+dev.off()
+```
+
+```{r final}
+stat_df %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_vs_TMBL_prognosis_summary_multivariate.csv")
+
+stat_df %>%
+  mutate(sig = if_else(wald_p < 0.05, "p < 0.05", "p >= 0.05")) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = c(order_df$Oncotree_CODE_Final_wide, "PanCan"))) %>% 
+  ggplot(aes(x = Oncotree_CODE_Final_wide, y = log2(hazard_ratio))) +
+  geom_point(aes(color = sig), size = 3) +  # Red dot for hazard ratio
+  geom_text(aes(y = 3.35, label = str_c("(", TMBL_num, ")")), size = 3) +
+  geom_text(aes(y = -3.35, label = str_c("(", TMBH_num, ")")), size = 3) +
+  geom_errorbar(aes(ymin = log2(lower95), ymax = log2(higher95), color = sig), color = "black", width = 0.2) +  # Error bars
+  geom_hline(yintercept = 0, linetype = "dashed") +  # Add a horizontal line at 1
+  labs(x = "Cancer Type", y = "log2(Hazard Ratio)") +
+  theme_minimal() +
+  ylim(-3.5, 3.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title.x = element_blank()) +
+  scale_color_manual(values = c("p < 0.05" = "red", 
+                                "p >= 0.05" = "black")) +
+  ggtitle("TMB-H vs TMB-L") +
+  theme(legend.position = "none") +
+  labs(caption = "Excluding ICI-treated cases")
+ggsave("result/pdf/analysis/TMBH/TMBH_vs_TMBL_prognosis_summary_multivariate.pdf", width = 15, height = 5)
+
+stat_df %>%
+  filter(TMBH_num >= 10 & TMBL_num >= 10) %>% 
+  mutate(sig = if_else(wald_p < 0.05, "p < 0.05", "p >= 0.05")) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = c(order_df$Oncotree_CODE_Final_wide, "PanCan"))) %>% 
+  ggplot(aes(x = Oncotree_CODE_Final_wide, y = log2(hazard_ratio))) +
+  geom_point(aes(color = sig), size = 3) +  # Red dot for hazard ratio
+  geom_text(aes(y = 3.35, label = str_c("(", TMBL_num, ")")), size = 3) +
+  geom_text(aes(y = -3.35, label = str_c("(", TMBH_num, ")")), size = 3) +
+  geom_errorbar(aes(ymin = log2(lower95), ymax = log2(higher95)), color = "black", width = 0.2) +  # Error bars
+  geom_hline(yintercept = 0, linetype = "dashed") +  # Add a horizontal line at 1
+  labs(x = "Cancer Type", y = "log2(Hazard Ratio)") +
+  theme_minimal() +
+  ylim(-3.5, 3.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title.x = element_blank()) +
+  scale_color_manual(values = c("p < 0.05" = "red", 
+                                "p >= 0.05" = "black")) +
+  ggtitle("TMB-H vs TMB-L") +
+  theme(legend.position = "none") +
+  labs(caption = "Excluding ICI-treated cases")
+ggsave("result/pdf/analysis/TMBH/TMBH_vs_TMBL_prognosis_summary_selected_multivariate.pdf", width = 10, height = 5)
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

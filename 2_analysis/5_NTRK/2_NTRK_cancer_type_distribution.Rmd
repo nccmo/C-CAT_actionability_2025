@@ -1,0 +1,122 @@
+---
+title: "NTRK_cancer_type_distribution"
+author: "Yuki Saito"
+date: "2025-03-07"
+output: html_document
+---
+
+- R markdown script to evaluate the cancer type distribution of cases harboring NTRK fusions.
+    
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+library(scales)
+library(ggplot2)
+library(ggsci)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/NTRK/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/NTRK/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r input}
+NTRK_fusion_data <- read_csv("result/table/analysis/NTRK/NTRK_fusion_PanCan_data_with_response_by_individual.csv")
+NTRK_fusion_data
+```
+
+```{r figure}
+color_df <- read_csv("var/cancer_type_color.csv")
+color_df
+
+# check
+NTRK_fusion_data %>% 
+  filter(!Oncotree_CODE_Final_wide %in% color_df$Oncotree_CODE_Final_wide) %>% 
+  count(Oncotree_CODE_Final_wide)
+
+color_df2 <- color_df %>% 
+  select(Oncotree_CODE_Final_wide, Wide_color) %>%
+  unique()
+color_df2
+
+color_df3 <- bind_rows(color_df2,
+                       tribble(
+                         ~Oncotree_CODE_Final_wide, ~Wide_color,
+                         "Angiomatoid fibrous histiocytoma", "#ffe185",
+                         "Bowel cancer (detail unknown)", "#e7ab80",
+                         "CNS/brain cancer (detail unknown)", "#b3fbd3",
+                         "Esophageal/stomach cancer (detail unknown / other)", "#b6d1e4",
+                         "Infantile fibrosarcoma", "#e8cc5d",
+                         "Kidney cancer (detail unknown)", "#fff6dc",
+                         "Lung cancer (detail unknown)", "#90f2e8",
+                         "Nerve sheath tumor", "#83866C",
+                         "Soft tissue cancer (detail unknown / other)", "#ffeeb8",
+                         "Testicular cancer (detail unknown)", "#ff7697"
+                       )
+)
+
+wide_color <- color_df3 %>%
+  deframe()
+```
+
+```{r figure2}
+order_df <- read_xlsx("ref/Oncotree_CODE_order.xlsx")
+
+NTRK_fusion_data2 <- NTRK_fusion_data %>% 
+  left_join2(color_df3)
+
+fig <- NTRK_fusion_data2 %>% 
+  count(Oncotree_CODE_Final_wide, Wide_color) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = order_df$Oncotree_CODE_Final_wide)) %>% 
+  arrange(Oncotree_CODE_Final_wide) %>% 
+  mutate(freq = n / sum(n)) %>%
+  mutate(freq_max = cumsum(freq)) %>%
+  mutate(freq_min = lag(freq_max)) %>% 
+  mutate(freq_min = if_else(is.na(freq_min), 0, freq_min)) %>% 
+  ggplot() +
+  geom_rect(aes(xmin = 1, xmax = 2, ymin = freq_min, ymax = freq_max, fill = Oncotree_CODE_Final_wide), color = "black", stat = "identity") +
+  coord_polar(theta = "y") +
+  xlim(c(0,2)) +
+  scale_fill_manual(name = "Cancer type",
+                    values = wide_color) +
+  theme(axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank())
+fig
+ggsave("result/pdf/analysis/NTRK/NTRK_fusion_cancer_type_count_with_legend.pdf", width = 10, height = 5) 
+fig + theme(legend.position = "none")
+ggsave("result/pdf/analysis/NTRK/NTRK_fusion_cancer_type_count.pdf") 
+```
+
+```{r count}
+NTRK_summary_df <- NTRK_fusion_data2 %>%
+  count(Oncotree_CODE_Final_wide) %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = order_df$Oncotree_CODE_Final_wide)) %>% 
+  arrange(Oncotree_CODE_Final_wide)
+NTRK_summary_df
+
+NTRK_summary_df %>% 
+  write_excel_csv("result/table/analysis/NTRK/NTRK_fusion_cancer_type_count.csv", na = "")  
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

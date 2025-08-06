@@ -1,0 +1,345 @@
+---
+title: "Treatment_strategy_by_cancer_type"
+author: "Yuki Saito"
+date: "2024-03-12"
+output: html_document
+---
+
+- R markdown script to evaluate treatment strategies in each tumor type.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+library(scales)
+library(ggplot2)
+library(ggsci)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/treatment_overview/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/treatment_overview/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r read data}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "") %>% 
+  filter(Pre_regimen_info_existence == "Yes")
+merged_data
+```
+
+```{r annotation}
+# treatment annotation
+merged_data %>%
+  count(PostEP_treatment_policy_name_estimated, PostEP_treatment_policy_name_estimated_rough, PostEP_treatment_policy_name_estimated_detail)
+
+merged_data$PostEP_treatment_policy_name_estimated_rough <- factor(merged_data$PostEP_treatment_policy_name_estimated_rough, 
+                                                                   levels = c("BSC",
+                                                                              "Chemotherapy"))
+merged_data$PostEP_treatment_policy_name_estimated_detail <- factor(merged_data$PostEP_treatment_policy_name_estimated_detail, 
+                                                                    levels = c("BSC",
+                                                                               "Chemotherapy",
+                                                                               "Other_off_label",
+                                                                               "Clinical_trial"))
+
+# evidence level annotation
+merged_data %>% 
+  count(Highest_evidence_level, Highest_evidence_level2)
+```
+
+```{r figure}
+merged_data %>%
+  mutate(Oncotree_CODE_Final_wide = if_else(Oncotree_CODE_Final_wide %in% wide_cancer_order,
+                                            Oncotree_CODE_Final_wide,
+                                            "Others")) %>%
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = c(wide_cancer_order, "Others"))) %>%
+  filter(Oncotree_CODE_Final_wide != "Others") %>% 
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_rough != "BSC") %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), 
+           color = "black", stat = "identity") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 0.4, label = paste0("(", comma(sum), ")")), size = 2.5, angle = 90) +
+  x90 +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.4)) +
+  ylab("Fraction of samples") +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  theme(legend.position = "none")
+ggsave("result/pdf/analysis/treatment_overview/clinicaltrial_offlabel_freq_by_cancer_type.pdf", height = 5, width = 10)
+```
+
+```{r figure2}
+tmp1 <- merged_data %>%
+  mutate(Oncotree_CODE_Final_wide = if_else(Oncotree_CODE_Final_wide %in% wide_cancer_order,
+                                            Oncotree_CODE_Final_wide,
+                                            "Others")) %>%
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                 "Off-label",
+                                                                 "Chemotherapy")) %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>% 
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  rename(ABCD_n = n) %>% 
+  ungroup() %>% 
+  complete(Oncotree_CODE_Final_wide, PostEP_treatment_policy_name_estimated_detail, fill = list(ABCD_n = 0)) %>% 
+  group_by(Oncotree_CODE_Final_wide) %>%
+  mutate(ABCD_freq = ABCD_n / sum(ABCD_n),
+         ABCD_sum = sum(ABCD_n)) %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy")
+print(tmp1)
+
+tmp2 <- merged_data %>% 
+  mutate(Oncotree_CODE_Final_wide = if_else(Oncotree_CODE_Final_wide %in% wide_cancer_order,
+                                            Oncotree_CODE_Final_wide,
+                                            "Others")) %>%
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                 "Off-label",
+                                                                 "Chemotherapy")) %>% 
+  filter(Highest_evidence_level2 %in% c("No_evidence", "Evidence_E")) %>% 
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  rename(NoE_n = n) %>% 
+  ungroup() %>% 
+  complete(Oncotree_CODE_Final_wide, PostEP_treatment_policy_name_estimated_detail, fill = list(NoE_n = 0)) %>% 
+  group_by(Oncotree_CODE_Final_wide) %>%
+  mutate(NoE_freq = NoE_n / sum(NoE_n),
+         NoE_sum = sum(NoE_n)) %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy")
+print(tmp2)
+
+tmp1 %>% 
+  filter(Oncotree_CODE_Final_wide != "Others") %>% 
+  left_join2(tmp2) %>% 
+  filter(ABCD_sum < 10 | NoE_sum < 10)
+
+output_df <- tmp2 %>% 
+  left_join2(tmp1) 
+
+output_df %>% 
+  filter(Oncotree_CODE_Final_wide != "Others") %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = wide_cancer_order)) %>%
+  mutate(diff_freq = ABCD_freq - NoE_freq) %>% 
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = diff_freq), fill = "darkblue", stat = "identity") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 0.42, label = paste0("(", comma(ABCD_sum), ")")), size = 2.5, angle = 90) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = -0.42, label = paste0("(", comma(NoE_sum), ")")), size = 2.5, angle = 90) +
+  x90 +
+  scale_y_continuous(expand = c(0,0), limits = c(-0.5, 0.5), breaks = c(-0.4, -0.2, 0, 0.2, 0.4)) +
+  ylab("Difference in fraction of samples")
+ggsave("result/pdf/analysis/treatment_overview/experimental_treatment_administration_rate_by_cancer_type.pdf", height = 5, width = 12)
+
+output_df %>% 
+  filter(Oncotree_CODE_Final_wide != "Others") %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = wide_cancer_order)) %>%
+  filter(ABCD_sum >= 30 & NoE_sum >= 30) %>% 
+  mutate(diff_freq = ABCD_freq - NoE_freq) %>%
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = diff_freq), fill = "darkblue", stat = "identity") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 0.2, label = paste0("(", comma(ABCD_sum), ")")), size = 2.5) +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = -0.2, label = paste0("(", comma(NoE_sum), ")")), size = 2.5) +
+  geom_hline(yintercept = 0, color = "black") +
+  x90 +
+  ylim(-0.4, 0.4) +
+  ylab("Difference in fraction of samples")
+ggsave("result/pdf/analysis/treatment_overview/experimental_treatment_administration_rate_by_cancer_type_v2.pdf", height = 5, width = 10)
+
+output_df %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/experimental_treatment_administration_rate_by_cancer_type.csv")
+```
+
+```{r by cancer type}
+for (tmp_cancer_type in wide_cancer_order){
+  tmp <- merged_data %>% 
+    filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+    filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+    filter(Oncotree_CODE_Final_wide == tmp_cancer_type) %>%
+    group_by(Highest_evidence_level2) %>% 
+    count(PostEP_treatment_policy_name_estimated_detail) %>%
+    mutate(freq = n / sum(n),
+           sum = sum(n))
+  
+  tmp_max <- tmp %>% 
+    filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+    group_by(Highest_evidence_level2) %>% 
+    mutate(freq2 = sum(freq)) %>% 
+    pull(freq2) %>% 
+    max()
+  
+  tmp2 <- merged_data %>% 
+    filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+    filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+    filter(Oncotree_CODE_Final_wide == tmp_cancer_type) %>% 
+    mutate(Highest_evidence_level2= if_else(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D"),
+                                            "AunapprovedBCD",
+                                            Highest_evidence_level2)) %>% 
+    mutate(Highest_evidence_level2= if_else(Highest_evidence_level2 %in% c("No_evidence", "Evidence_E"),
+                                            "NoE",
+                                            Highest_evidence_level2)) %>%
+    mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                   "Off-label",
+                                                                   "Chemotherapy")) %>% 
+    group_by(Highest_evidence_level2) %>%
+    count(PostEP_treatment_policy_name_estimated_detail) %>%
+    mutate(freq = n / sum(n),
+           sum = sum(n))
+  
+  fig <- tmp %>% 
+    filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+    ggplot() +
+    geom_bar(aes(x = Highest_evidence_level2, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+    geom_text(data = tmp,
+              aes(x = Highest_evidence_level2, y = tmp_max + 0.04, label =  paste0("(", comma(sum), ")")), size = 3) +
+    geom_hline(yintercept = tmp2[tmp2$Highest_evidence_level2 == "AunapprovedBCD" & tmp2$PostEP_treatment_policy_name_estimated_detail == "Off-label",]$freq, 
+               linetype = "dashed",
+               color = "red") +
+    geom_hline(yintercept = tmp2[tmp2$Highest_evidence_level2 == "NoE" & tmp2$PostEP_treatment_policy_name_estimated_detail == "Off-label",]$freq, 
+               linetype = "dashed",
+               color = "black") +    
+    theme(axis.title.x = element_blank()) +
+    ylab("Fraction of samples") +
+    scale_y_continuous(expand = c(0,0), limits = c(0, tmp_max + 0.05)) +
+    x90 +
+    scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+    ggtitle(tmp_cancer_type) +
+    guides(fill = guide_legend(title = "Treatment policy",
+                               reverse = TRUE))
+  print(fig)
+}
+```
+
+```{r by cancer type summary}
+treatment_evidence_cancertype_df <- tibble()
+for (tmp_cancer_type in wide_cancer_order) {
+  tmp <- merged_data %>% 
+    filter(Oncotree_CODE_Final_wide == tmp_cancer_type) %>%
+    filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+    filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>%
+    mutate(Highest_evidence_level2 = if_else(Highest_evidence_level2 %in% c("No_evidence", "Evidence_E"),
+                                             "NoE",
+                                             Highest_evidence_level2)) %>%
+    mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                   "Off-label",
+                                                                   "Chemotherapy")) %>%
+    mutate(PostEP_treatment_policy_name_estimated_detail = factor(PostEP_treatment_policy_name_estimated_detail, 
+                                                                  levels = c("Chemotherapy",
+                                                                             "Off-label"))) %>% 
+    group_by(Highest_evidence_level2) %>% 
+    count(PostEP_treatment_policy_name_estimated_detail) %>%
+    complete(PostEP_treatment_policy_name_estimated_detail, fill = list(n = 0)) %>% 
+    mutate(sum = sum(n)) %>% 
+    ungroup() %>% 
+    mutate(Oncotree_CODE_Final_wide = tmp_cancer_type)
+  
+  treatment_evidence_cancertype_df <- bind_rows(treatment_evidence_cancertype_df, tmp)
+}
+
+tmp <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>%
+  mutate(Highest_evidence_level2 = if_else(Highest_evidence_level2 %in% c("No_evidence", "Evidence_E"),
+                                           "NoE",
+                                           Highest_evidence_level2)) %>%
+  mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                 "Off-label",
+                                                                 "Chemotherapy")) %>%
+  mutate(PostEP_treatment_policy_name_estimated_detail = factor(PostEP_treatment_policy_name_estimated_detail, 
+                                                                levels = c("Chemotherapy",
+                                                                           "Off-label"))) %>% 
+  group_by(Highest_evidence_level2) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  complete(PostEP_treatment_policy_name_estimated_detail, fill = list(n = 0)) %>% 
+  mutate(sum = sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Oncotree_CODE_Final_wide = "PanCan")
+treatment_evidence_cancertype_df <- bind_rows(treatment_evidence_cancertype_df, tmp)
+  
+treatment_evidence_cancertype_df
+treatment_evidence_cancertype_df %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_highest_evidence_level_and_cancer_type.csv")
+```
+
+```{r by cancer type summary2}
+treatment_evidence_cancertype_df <- tibble()
+for (tmp_cancer_type in wide_cancer_order) {
+  tmp <- merged_data %>% 
+    filter(Oncotree_CODE_Final_wide == tmp_cancer_type) %>%
+    filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+    filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>%
+    mutate(Highest_evidence_level2= if_else(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D"),
+                                            "AunapprovedBCD",
+                                            Highest_evidence_level2)) %>% 
+    mutate(Highest_evidence_level2 = if_else(Highest_evidence_level2 %in% c("No_evidence", "Evidence_E"),
+                                             "NoE",
+                                             Highest_evidence_level2)) %>%
+    mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                   "Off-label",
+                                                                   "Chemotherapy")) %>%
+    mutate(PostEP_treatment_policy_name_estimated_detail = factor(PostEP_treatment_policy_name_estimated_detail, 
+                                                                  levels = c("Chemotherapy",
+                                                                             "Off-label"))) %>% 
+    group_by(Highest_evidence_level2) %>% 
+    count(PostEP_treatment_policy_name_estimated_detail) %>%
+    complete(PostEP_treatment_policy_name_estimated_detail, fill = list(n = 0)) %>% 
+    mutate(sum = sum(n)) %>% 
+    ungroup() %>% 
+    mutate(Oncotree_CODE_Final_wide = tmp_cancer_type)
+  
+  treatment_evidence_cancertype_df <- bind_rows(treatment_evidence_cancertype_df, tmp)
+}
+
+tmp <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>%
+  mutate(Highest_evidence_level2= if_else(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D"),
+                                          "AunapprovedBCD",
+                                          Highest_evidence_level2)) %>% 
+  mutate(Highest_evidence_level2 = if_else(Highest_evidence_level2 %in% c("No_evidence", "Evidence_E"),
+                                           "NoE",
+                                           Highest_evidence_level2)) %>%
+  mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                 "Off-label",
+                                                                 "Chemotherapy")) %>%
+  mutate(PostEP_treatment_policy_name_estimated_detail = factor(PostEP_treatment_policy_name_estimated_detail, 
+                                                                levels = c("Chemotherapy",
+                                                                           "Off-label"))) %>% 
+  group_by(Highest_evidence_level2) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  complete(PostEP_treatment_policy_name_estimated_detail, fill = list(n = 0)) %>% 
+  mutate(sum = sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Oncotree_CODE_Final_wide = "PanCan")
+treatment_evidence_cancertype_df <- bind_rows(treatment_evidence_cancertype_df, tmp)
+  
+treatment_evidence_cancertype_df
+treatment_evidence_cancertype_df %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_highest_evidence_level2_and_cancer_type.csv")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

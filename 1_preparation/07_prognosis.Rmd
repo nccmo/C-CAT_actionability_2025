@@ -1,0 +1,247 @@
+---
+title: "prognosis"
+author: "Yuki Saito"
+date: "2024-09-17"
+output: html_document
+---
+
+- R markdown script to annotate prognosis.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+```
+
+```{r source}
+source("../../R/utils.R")
+```
+
+```{r read in merged data, warning=FALSE, message=FALSE}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data4.csv", na = "")
+merged_data
+
+basic_data <- merged_data %>% 
+  select(Tumor_Sample_Barcode, Registration_date, 
+         Oncotree_CODE, Oncotree_CODE_name, ONCOTREE_Level1, 
+         Oncotree_CODE_Final_narrow,
+         Oncotree_CODE_Final_wide,
+         Patho_diagnosis, Patho_diagnosis_sample)
+```
+
+```{r preparation}
+# list up organ names
+organ_names <- list.files("../../../sh_c-cat_analysis/data/ccat/ver20240621/F1CDx/",
+                          full.names = FALSE)
+organ_names[1:3]
+
+# colnames reference
+case_colnames_df <- read_xlsx("../../ref/colnames_ver202406.xlsx", "case") %>% 
+  filter(Prognosis_columns == "TRUE")
+head(case_colnames_df)
+
+case_cols <- case_colnames_df
+case_cols["coltypes"][case_cols["coltypes"] == "character"] <- "c"
+case_cols["coltypes"][case_cols["coltypes"] == "numeric"] <- "n"
+case_cols["coltypes"][case_cols["coltypes"] == "logical"] <- "l"
+case_cols["coltypes"][case_cols["coltypes"] == "date"] <- "D"
+case_cols_collapsed <- paste(case_cols$coltypes, collapse = "")
+```
+
+```{r prognosis data, warning=FALSE, message=FALSE}
+prognosis_data <- list()
+for (organ in organ_names){
+  # read in prognosis data
+  organ_prognosis_data <- read_csv(paste0("result/table/prep/case/", organ, "/prognosis_data.csv"),
+                                        col_types = case_cols_collapsed)
+  prognosis_data[[organ]] <- organ_prognosis_data
+}
+prognosis_data <- bind_rows(prognosis_data)
+```
+
+```{r preliminary evaluation, warning=FALSE, message=FALSE}
+prognosis_data %>% 
+  filter(Tumor_Sample_Barcode == "0003C24EB63415C564DDB7B0ADECE8A8EBAAF5DC7197D3E4480F1B609CA26975")
+
+tmp <- prognosis_data %>%
+  mutate(Final_survival_date = if_else(!is.na(Death_date), Death_date, Last_survival_confirmation_date)) %>% 
+  group_by(Tumor_Sample_Barcode) %>% 
+  summarise(Final_survival_date = max(Final_survival_date, na.rm = TRUE)) %>% 
+  mutate(barcode = paste(Tumor_Sample_Barcode, Final_survival_date))
+
+final_date_not_equal_death_date_samples <- prognosis_data %>% 
+  mutate(Final_survival_date = if_else(!is.na(Death_date), Death_date, Last_survival_confirmation_date)) %>% 
+  mutate(barcode = paste(Tumor_Sample_Barcode, Final_survival_date)) %>% 
+  filter(!barcode %in% tmp$barcode) %>% 
+  filter(!is.na(Death_date))
+
+prognosis_data %>% 
+  filter(Tumor_Sample_Barcode %in% final_date_not_equal_death_date_samples$Tumor_Sample_Barcode) %>% 
+  arrange(Tumor_Sample_Barcode)
+
+multiple_death_date_data <- prognosis_data %>% 
+  select(-Cause_of_death, -Cause_of_death_name) %>%
+  unique() %>% 
+  filter(!is.na(Death_date)) %>% 
+  count(Tumor_Sample_Barcode) %>% 
+  filter(n > 1)
+
+prognosis_data %>% 
+  filter(!is.na(Death_date)) %>% 
+  filter(Tumor_Sample_Barcode %in% multiple_death_date_data$Tumor_Sample_Barcode) %>% 
+  arrange(Tumor_Sample_Barcode)
+```
+
+```{r data curation}
+prognosis_data2 <- prognosis_data %>% 
+  filter(!Tumor_Sample_Barcode %in% multiple_death_date_data$Tumor_Sample_Barcode) 
+
+prognosis_data_with_death_date_information <- prognosis_data2 %>% 
+  filter(!is.na(Death_date)) %>%
+  rename(Final_survival_date = Death_date)
+
+# check
+prognosis_data_with_death_date_information %>% 
+  count(Outcome_name)
+
+prognosis_data_with_death_date_information %>% 
+  select(-Cause_of_death, -Cause_of_death_name) %>%
+  unique() %>% 
+  count(Tumor_Sample_Barcode) %>% 
+  filter(n >= 2)
+
+prognosis_data_with_death_date_information <- prognosis_data_with_death_date_information %>% 
+  select(Tumor_Sample_Barcode, Final_survival_date) %>%
+  mutate(Outcome_name = "Death") %>% 
+  unique()
+
+prognosis_data_without_death_date_information <- prognosis_data2 %>% 
+  filter(!Tumor_Sample_Barcode %in% prognosis_data_with_death_date_information$Tumor_Sample_Barcode) %>% 
+  filter(!is.na(Last_survival_confirmation_date)) %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(Final_survival_date = max(Last_survival_confirmation_date, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate(Outcome_name = "Censored")
+```
+
+```{r final curation}
+prognosis_data_final <- bind_rows(prognosis_data_with_death_date_information,
+                                  prognosis_data_without_death_date_information)
+
+# check
+prognosis_data_final
+
+prognosis_data_final %>% 
+  count(Outcome_name)
+
+prognosis_data_final %>% 
+  count(Tumor_Sample_Barcode) %>% 
+  filter(n >= 2)
+
+prognosis_data %>% 
+  filter(!Tumor_Sample_Barcode %in% prognosis_data_final$Tumor_Sample_Barcode)
+```
+
+```{r preparation2}
+# colnames reference
+case_colnames_df <- read_xlsx("../../ref/colnames_ver202406.xlsx", "case") %>% 
+  filter(Pre_treatment_columns == "TRUE")
+head(case_colnames_df)
+
+case_cols <- case_colnames_df
+case_cols["coltypes"][case_cols["coltypes"] == "character"] <- "c"
+case_cols["coltypes"][case_cols["coltypes"] == "numeric"] <- "n"
+case_cols["coltypes"][case_cols["coltypes"] == "logical"] <- "l"
+case_cols["coltypes"][case_cols["coltypes"] == "date"] <- "D"
+case_cols_collapsed <- paste(case_cols$coltypes, collapse = "")
+```
+
+```{r pre treatment data, warning=FALSE, message=FALSE}
+pretreatment_data <- list()
+for (organ in organ_names){
+  # read in prognosis data
+  organ_pretreatment_data <- read_csv(paste0("result/table/prep/case/", organ, "/pre_treatment_data.csv"),
+                                      col_types = case_cols_collapsed)
+  pretreatment_data[[organ]] <- organ_pretreatment_data
+}
+pretreatment_data <- bind_rows(pretreatment_data)
+```
+
+```{r preliminary analysis}
+pretreatment_data_summary <- pretreatment_data %>% 
+  filter(!is.na(PreEP_regimen_startdate)) %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(First_chemo_date = min(PreEP_regimen_startdate, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate(barcode = paste(Tumor_Sample_Barcode, First_chemo_date, sep = "_"))
+
+pretreatment_data %>% 
+  mutate(barcode = paste(Tumor_Sample_Barcode, PreEP_regimen_startdate, sep = "_")) %>%
+  filter(barcode %in% pretreatment_data_summary$barcode) %>% 
+  select(Tumor_Sample_Barcode, PreEP_regimen_startdate, `PreEP_regimen_Treatment line`) %>% 
+  unique() 
+
+tmp <- pretreatment_data %>% 
+  mutate(barcode = paste(Tumor_Sample_Barcode, PreEP_regimen_startdate, sep = "_")) %>%
+  filter(!barcode %in% pretreatment_data_summary$barcode) %>% 
+  select(Tumor_Sample_Barcode, PreEP_regimen_startdate, `PreEP_regimen_Treatment line`) %>% 
+  unique() %>% 
+  filter(`PreEP_regimen_Treatment line` != 1)
+tmp
+
+pretreatment_data %>% 
+  select(Tumor_Sample_Barcode, PreEP_regimen_startdate, `PreEP_regimen_Treatment line`) %>% 
+  filter(Tumor_Sample_Barcode %in% tmp$Tumor_Sample_Barcode)
+
+pretreatment_data %>% 
+  filter(Tumor_Sample_Barcode == "3DEE6812D9D67D9348703E4ECC2C6300975195A1B8E1020BE22EC062A9881D2B")
+```
+
+```{r chemo date curation}
+pretreatment_data_final <- pretreatment_data %>% 
+  filter(`PreEP_regimen_Treatment line` == 1) %>% 
+  filter(!is.na(PreEP_regimen_startdate)) %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(First_chemo_date = min(PreEP_regimen_startdate, na.rm = TRUE)) %>% 
+  ungroup()
+pretreatment_data_final
+```
+
+```{r left join prognosis data}
+merged_data <- merged_data %>% 
+  left_join2(prognosis_data_final) %>% 
+  left_join2(pretreatment_data_final)
+
+library(lubridate)
+merged_data <- merged_data %>% 
+  mutate(OS_time_from_CGP = time_length(Final_survival_date - Registration_date, "years"),
+         OS_time_from_diagnosis = time_length(Final_survival_date - Diagnosis_date, "years"),
+         OS_time_from_chemo = time_length(Final_survival_date - First_chemo_date, "years"),
+         OS = case_when(Outcome_name == "Death" ~ 1,
+                        Outcome_name == "Censored" ~ 0,
+                        TRUE ~ NA_real_))
+
+merged_data <- merged_data %>% 
+  mutate(OS = if_else(OS_time_from_CGP < 0, NA_real_, OS))
+```
+
+```{r save}
+prognosis_data_final %>% 
+  write_excel_csv("result/table/merged/prognosis_data.csv", na = "")
+pretreatment_data_final %>% 
+  write_excel_csv("result/table/merged/first_chemo_date_data.csv", na = "")
+merged_data %>% 
+  write_excel_csv("result/table/merged/merged_patient_data5.csv", na = "")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

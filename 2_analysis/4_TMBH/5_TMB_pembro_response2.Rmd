@@ -1,0 +1,273 @@
+---
+title: "TMB Pembro response part2"
+author: "Yuki Saito"
+date: "2025-01-06"
+output: html_document
+---
+
+- R markdown script for evaluating response to pembrolizumab in TMB-H cases (part2).
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(ggsurvfit)
+library(gtsummary)
+library(survival)
+library(survminer)
+library(scales)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/survival.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r read in merged data, warning=FALSE, message=FALSE}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "")
+merged_data
+```
+
+```{r selection of samples}
+merged_data2 <- merged_data %>%
+  filter(!is.na(TMB_score_F1)) %>% # exclusion of samples in which TMB cannot be determined
+  filter(TMB_EvidenceA == "TMB_high" | TMB_score_F1 < 10) %>%
+  mutate(TMB_status = if_else(TMB_score_F1 >= 10, "TMB-High", "TMB-Low"))
+
+merged_data2 %>% 
+  count(TMB_status)
+```
+
+```{r by burden in ICI naive}
+TMBH_treatment_data_no_prev_ICI <- merged_data2 %>% 
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(is.na(PreEP_ICI)) %>% 
+  filter(TMB_status == "TMB-High") %>% 
+  mutate(TMB_class = case_when(TMB_score_F1 >= 20 ~ "TMB>=20",
+                               TRUE ~ "20>TMB>=10"))
+
+TMBH_pembro_response_df_by_burden <- TMBH_treatment_data_no_prev_ICI %>%
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE",
+                                                      "PD",
+                                                      PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  group_by(TMB_class) %>% 
+  count(PostEP_pembrolizumab_best_response) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = factor(PostEP_pembrolizumab_best_response, levels = c("PD", "SD", "PR", "CR")))
+TMBH_pembro_response_df_by_burden
+
+stat_df <- TMBH_treatment_data_no_prev_ICI %>%
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE",
+                                                      "PD",
+                                                      PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  mutate(response = if_else(PostEP_pembrolizumab_best_response %in% c("CR", "PR"),
+                            "Response",
+                            "Non-response")) %>%
+  group_by(TMB_class) %>% 
+  count(response)
+stat_df
+
+stat <- matrix(stat_df$n, ncol = 2) %>% 
+  fisher.test()
+  
+TMBH_pembro_response_df_by_burden %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_pembro_response_by_burden_in_noprev_ICI.csv")
+
+TMBH_pembro_response_df_by_burden %>% 
+  ggplot() +
+  geom_bar(aes(x = TMB_class, y = freq, fill = PostEP_pembrolizumab_best_response), color = "black", stat = "identity", position = "fill") +
+  geom_text(aes(x = TMB_class, y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  ysum +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of cases") +
+  ggtitle("TMB-H") +
+  labs(caption = paste("p-value: ", stat$p.value)) +
+  theme(axis.title.x = element_blank())
+ggsave("result/pdf/analysis/TMBH/TMBH_pembro_response_by_burden_in_noprev_ICI.pdf")
+```
+
+```{r by MSI in ICI naive}
+TMBH_treatment_data_no_prev_ICI %>% 
+  count(MSI_F1)
+
+TMBH_pembro_response_df_by_MSI <- TMBH_treatment_data_no_prev_ICI %>%
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!MSI_F1 %in% c("equivocal", "cannot be determined")) %>% 
+  mutate(MSI_F1 = factor(MSI_F1, levels = c("stable", "high"))) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE",
+                                                      "PD",
+                                                      PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  group_by(MSI_F1) %>% 
+  count(PostEP_pembrolizumab_best_response) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = factor(PostEP_pembrolizumab_best_response, levels = c("PD", "SD", "PR", "CR")))
+TMBH_pembro_response_df_by_MSI
+
+stat_df <- TMBH_treatment_data_no_prev_ICI %>%
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!MSI_F1 %in% c("equivocal", "cannot be determined")) %>% 
+  mutate(MSI_F1 = factor(MSI_F1, levels = c("stable", "high"))) %>% 
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE",
+                                                      "PD",
+                                                      PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  mutate(response = if_else(PostEP_pembrolizumab_best_response %in% c("CR", "PR"),
+                            "Response",
+                            "Non-response")) %>%
+  group_by(MSI_F1) %>%
+  count(response)
+stat_df
+
+stat <- matrix(stat_df$n, ncol = 2) %>% 
+  fisher.test()
+
+TMBH_pembro_response_df_by_MSI %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_pembro_response_by_MSI_in_noprev_ICI.csv")
+
+TMBH_pembro_response_df_by_MSI %>%
+  ggplot() +
+  geom_bar(aes(x = MSI_F1, y = freq, fill = PostEP_pembrolizumab_best_response), color = "black", stat = "identity", position = "fill") +
+  geom_text(aes(x = MSI_F1, y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  ysum +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of cases") +
+  ggtitle("TMB-H") +
+  labs(caption = paste("p-value: ", stat$p.value)) +
+  theme(axis.title.x = element_blank())
+ggsave("result/pdf/analysis/TMBH/TMBH_pembro_response_by_MSI_in_noprev_ICI.pdf")
+```
+
+```{r by burden and MSI in ICI naive}
+TMBH_pembro_response_df_by_MSI_burden <- TMBH_treatment_data_no_prev_ICI %>%
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!MSI_F1 %in% c("equivocal", "cannot be determined")) %>%
+  mutate(MSI_TMB = paste(MSI_F1, TMB_class, sep = "_")) %>%
+  mutate(MSI_TMB = factor(MSI_TMB,
+                          levels =c("stable_20>TMB>=10",
+                                    "high_20>TMB>=10",
+                                    "stable_TMB>=20",
+                                    "high_TMB>=20"))) %>%
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE",
+                                                      "PD",
+                                                      PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  group_by(MSI_TMB) %>% 
+  count(PostEP_pembrolizumab_best_response) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  mutate(PostEP_pembrolizumab_best_response = factor(PostEP_pembrolizumab_best_response, levels = c("PD", "SD", "PR", "CR")))
+TMBH_pembro_response_df_by_MSI_burden
+
+stat_df <- TMBH_treatment_data_no_prev_ICI %>%
+  filter(Post_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_pembrolizumab)) %>% 
+  filter(!MSI_F1 %in% c("equivocal", "cannot be determined")) %>%
+  mutate(MSI_TMB = paste(MSI_F1, TMB_class, sep = "_")) %>%
+  mutate(MSI_TMB = factor(MSI_TMB,
+                          levels =c("stable_20>TMB>=10",
+                                    "high_20>TMB>=10",
+                                    "stable_TMB>=20",
+                                    "high_TMB>=20"))) %>%
+  mutate(PostEP_pembrolizumab_best_response = if_else(PostEP_pembrolizumab_best_response == "PD, NE",
+                                                      "PD",
+                                                      PostEP_pembrolizumab_best_response)) %>% 
+  filter(PostEP_pembrolizumab_best_response != "NE") %>% 
+  mutate(response = if_else(PostEP_pembrolizumab_best_response %in% c("CR", "PR"),
+                            "Response",
+                            "Non-response")) %>%
+  group_by(MSI_TMB) %>%
+  count(response)
+stat_df
+
+stat1 <- stat_df %>% 
+  filter(MSI_TMB %in% c("stable_20>TMB>=10", "high_20>TMB>=10")) %>% 
+  pull(n) %>% 
+  matrix(ncol = 2) %>% 
+  fisher.test()
+stat2 <- stat_df %>% 
+  filter(MSI_TMB %in% c("stable_20>TMB>=10", "stable_TMB>=20")) %>%
+  pull(n) %>% 
+  matrix(ncol = 2) %>% 
+  fisher.test()
+stat3 <- stat_df %>% 
+  filter(MSI_TMB %in% c("stable_20>TMB>=10", "high_TMB>=20")) %>% 
+  pull(n) %>% 
+  matrix(ncol = 2) %>% 
+  fisher.test()
+stat4 <- stat_df %>%
+  filter(MSI_TMB %in% c("high_20>TMB>=10", "stable_TMB>=20")) %>% 
+  pull(n) %>% 
+  matrix(ncol = 2) %>% 
+  fisher.test()
+stat5 <- stat_df %>%
+  filter(MSI_TMB %in% c("high_20>TMB>=10", "high_TMB>=20")) %>% 
+  pull(n) %>% 
+  matrix(ncol = 2) %>% 
+  fisher.test()
+stat6 <- stat_df %>%
+  filter(MSI_TMB %in% c("stable_TMB>=20", "high_TMB>=20")) %>% 
+  pull(n) %>% 
+  matrix(ncol = 2) %>% 
+  fisher.test()
+
+TMBH_pembro_response_df_by_MSI_burden %>% 
+  write_excel_csv("result/table/analysis/TMBH/TMBH_pembro_response_by_MSI_burden_in_noprev_ICI.csv")
+
+TMBH_pembro_response_df_by_MSI_burden %>%
+  ggplot() +
+  geom_bar(aes(x = MSI_TMB, y = freq, fill = PostEP_pembrolizumab_best_response), color = "black", stat = "identity", position = "fill") +
+  geom_text(aes(x = MSI_TMB, y = 1.025, label = paste("(", sum, ")", sep = "")), size = 3) +
+  ysum +
+  scale_fill_manual(name = "Best response", 
+                    values = c("CR" = "#CD534C", 
+                               "PR" = "#EFC000",
+                               "SD" = "#0073C2", 
+                               "PD" = "#868686")) +
+  ylab("Fraction of cases") +
+  ggtitle("TMB-H") +
+  labs(caption = paste("stable_20>TMB>=10 vs high_20>TMB>=10 P: ", stat1$p.value, "\n",
+                       "stable_20>TMB>=10 vs stable_TMB>=20 P: ", stat2$p.value, "\n",
+                       "stable_20>TMB>=10 vs high_TMB>=20 P: ", stat3$p.value, "\n",
+                       "high_20>TMB>=10 vs stable_TMB>=20 P: ", stat4$p.value, "\n",
+                       "high_20>TMB>=10 vs high_TMB>=20 P: ", stat5$p.value, "\n",
+                       "stable_TMB>=20 vs high_TMB>=20 P: ", stat6$p.value)) +
+  theme(axis.title.x = element_blank())
+ggsave("result/pdf/analysis/TMBH/TMBH_pembro_response_by_MSI_burden_in_noprev_ICI.pdf")
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
+

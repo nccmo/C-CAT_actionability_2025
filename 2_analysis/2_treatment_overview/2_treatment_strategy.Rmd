@@ -1,0 +1,944 @@
+---
+title: "Treatment strategy"
+author: "Yuki Saito"
+date: "2024-03-12"
+output: html_document
+---
+
+- R markdown script to evaluate treatment strategies.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+library(scales)
+library(ggplot2)
+library(ggsci)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/treatment_overview/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/treatment_overview/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r function}
+cocran_armitage_trend_test_manual <- function(success_counts, trial_counts) {
+  # Calculate proportions
+  proportions <- success_counts / trial_counts
+
+  # Calculate the overall proportion
+  total_success <- sum(success_counts)
+  total_trials <- sum(trial_counts)
+  overall_proportion <- total_success / total_trials
+
+  # Calculate the weights
+  weights <- 1:length(success_counts)
+
+  # Calculate numerator and denominator for Z-statistic
+  numerator <- sum(weights * (proportions - overall_proportion) * trial_counts)
+  denominator <- sqrt(sum(weights^2 * proportions * (1 - proportions) * trial_counts))
+
+  # Calculate Z-statistic
+  z_statistic <- numerator / denominator
+
+  # Calculate p-value (two-sided)
+  p_value <- 2 * (1 - pnorm(abs(z_statistic)))
+
+  # Return results as a named vector
+  return(c(Z_statistic = z_statistic, P_value = p_value))
+}
+```
+
+```{r read data}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "") %>% 
+  filter(Pre_regimen_info_existence == "Yes")
+merged_data
+```
+
+```{r annotation}
+# treatment annotation
+merged_data %>%
+  count(PostEP_treatment_policy_name_estimated, PostEP_treatment_policy_name_estimated_rough, PostEP_treatment_policy_name_estimated_detail)
+
+merged_data$PostEP_treatment_policy_name_estimated_rough <- factor(merged_data$PostEP_treatment_policy_name_estimated_rough, 
+                                                                   levels = c("BSC",
+                                                                              "Chemotherapy"))
+merged_data$PostEP_treatment_policy_name_estimated_detail <- factor(merged_data$PostEP_treatment_policy_name_estimated_detail, 
+                                                                    levels = c("BSC",
+                                                                               "Chemotherapy",
+                                                                               "Other_off_label",
+                                                                               "Clinical_trial"))
+
+# evidence level annotation
+merged_data %>% 
+  count(Highest_evidence_level, Highest_evidence_level2)
+```
+
+```{r overview}
+print("Number of samples with post-CGP treatment policy")
+tmp <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>%
+  nrow()
+print(tmp)
+print(100*tmp/nrow(merged_data))
+
+postEP_treatment_rough_count_df <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>% 
+  count(PostEP_treatment_policy_name_estimated_rough) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_rough_count_df)
+postEP_treatment_rough_count_df %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/PostEP_treatment_policy_estimated_rough.csv")
+
+ggplot(postEP_treatment_rough_count_df) +
+  geom_bar(aes(x = "", y = freq, fill = PostEP_treatment_policy_name_estimated_rough), color = "black", stat = "identity") +
+  geom_text(aes(x = "", y = 1-freq, label = scales::percent(1-freq, accuracy = 0.01)), position = position_stack(vjust = 0.5)) +
+  coord_polar("y") +
+  scale_fill_manual(values = c("#BFBEC5", "lightpink")) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  theme(axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_rough.pdf")
+
+postEP_treatment_detail_count_df <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_detail_count_df)
+postEP_treatment_detail_count_df %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/PostEP_treatment_policy_estimated_detail.csv")
+
+ggplot(postEP_treatment_detail_count_df) +
+  geom_bar(aes(x = "", y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  coord_polar("y") +
+  scale_fill_manual(values = c("lightgray", ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  theme(axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_detail.pdf")
+```
+
+```{r highest evidence rough}
+# by Highest_evidence_level (rough)
+postEP_treatment_rough_count_df_by_evidence <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>%
+  group_by(Highest_evidence_level2) %>% 
+  count(PostEP_treatment_policy_name_estimated_rough) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_rough_count_df_by_evidence)
+postEP_treatment_rough_count_df_by_evidence %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/PostEP_treatment_policy_estimated_rough_by_highest_evidence_level.csv")
+
+ggplot(postEP_treatment_rough_count_df_by_evidence) +
+  geom_bar(aes(x = Highest_evidence_level2, y = freq, fill = PostEP_treatment_policy_name_estimated_rough), color = "black", stat = "identity") +
+  geom_text(aes(x = Highest_evidence_level2, y = 1.025, label =  paste0("(", comma(sum), ")")), size = 3) +
+  theme(axis.title.x = element_blank()) +
+  ylab("Fraction of samples") +
+  ysum +
+  x90 +
+  scale_fill_manual(values = c("#BFBEC5", "lightpink")) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_highest_evidence_level.pdf")
+```
+
+```{r highest evidence detail}
+# by Highest_evidence_level (detailed)
+postEP_treatment_detail_count_df_by_evidence <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  group_by(Highest_evidence_level2) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_detail_count_df_by_evidence)
+postEP_treatment_detail_count_df_by_evidence %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_highest_evidence_level.csv")
+
+# stat
+merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>%
+  mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                 "Off-label",
+                                                                 "Chemotherapy")) %>% 
+  group_by(Highest_evidence_level2) %>%
+  count(PostEP_treatment_policy_name_estimated_detail) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail == "Off-label")
+
+summary_df <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>%
+  mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                 "Off-label",
+                                                                 "Chemotherapy")) %>%
+  mutate(Highest_evidence_level2 = if_else(Highest_evidence_level2 %in% c("Evidence_B", "Evidence_C", "Evidence_D"),
+                                           "Evidence_BCD",
+                                           Highest_evidence_level2)) %>%
+  group_by(Highest_evidence_level2) %>%
+  count(PostEP_treatment_policy_name_estimated_detail) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail == "Off-label")
+
+summary_df2 <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>%
+  mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                 "Off-label",
+                                                                 "Chemotherapy")) %>%
+  group_by(Highest_evidence_level2) %>%
+  count(PostEP_treatment_policy_name_estimated_detail) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ungroup()
+
+summary_df2 <- summary_df2 %>%
+  mutate(freq_diff = freq - ifelse(Highest_evidence_level2 == "No_evidence", freq, 
+                                   summary_df2 %>% 
+                                     filter(Highest_evidence_level2 == "No_evidence") %>% 
+                                     pull(freq))) %>% 
+  mutate(freq_diff = 100 * freq_diff)
+
+
+k1 <- summary_df %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(approved)", "No_evidence")) %>% 
+  pull(n)
+k2 <- summary_df %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(approved)", "No_evidence")) %>% 
+  mutate(n2 = sum - n) %>% 
+  pull(n2)
+matrix(c(k1, k2), ncol = 2) %>% 
+  chisq.test()
+
+k3 <- summary_df %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "No_evidence")) %>% 
+  pull(n)
+k4 <- summary_df %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "No_evidence")) %>% 
+  mutate(n2 = sum - n) %>% 
+  pull(n2)
+matrix(c(k3, k4), ncol = 2) %>% 
+  chisq.test()
+
+k5 <- summary_df %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_BCD", "No_evidence")) %>% 
+  pull(n)
+k6 <- summary_df %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_BCD", "No_evidence")) %>% 
+  mutate(n2 = sum - n) %>% 
+  pull(n2)
+matrix(c(k5, k6), ncol = 2) %>% 
+  chisq.test()
+
+k7 <- summary_df %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_E", "No_evidence")) %>% 
+  pull(n)
+k8 <- summary_df %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_E", "No_evidence")) %>% 
+  mutate(n2 = sum - n) %>% 
+  pull(n2)
+matrix(c(k7, k8), ncol = 2) %>% 
+  chisq.test()
+
+postEP_treatment_detail_count_df_by_evidence %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = Highest_evidence_level2, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  geom_hline(yintercept = as.numeric(summary_df2[summary_df2$Highest_evidence_level2 == "No_evidence","freq"]), 
+             linetype = "dashed") +
+  geom_text(aes(x = Highest_evidence_level2, y = 0.24, label =  paste0("(", comma(sum), ")")), size = 3) +
+  geom_text(data = summary_df2,
+            aes(x = Highest_evidence_level2, y = 0.23, label = paste0(sprintf("%.2f", freq_diff), "%")), size = 3) +
+  theme(axis.title.x = element_blank()) +
+  ylab("Fraction of samples") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.25)) +
+  x90 +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_highest_evidence_level.pdf", width = 7.5)
+```
+
+```{r highest evidence detail2}
+summary_df3 <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>%
+  mutate(PostEP_treatment_policy_name_estimated_detail = if_else(PostEP_treatment_policy_name_estimated_detail %in% c("Other_off_label", "Clinical_trial"),
+                                                                 "Off-label",
+                                                                 "Chemotherapy")) %>%
+  mutate(Highest_evidence_level2 = if_else(Highest_evidence_level2 %in% c("Evidence_E", "No_evidence"),
+                                           "Evidence_ENo",
+                                           Highest_evidence_level2)) %>%
+  group_by(Highest_evidence_level2) %>%
+  count(PostEP_treatment_policy_name_estimated_detail) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ungroup()
+
+summary_df4 <- summary_df3 %>%
+  mutate(freq_diff = freq - ifelse(Highest_evidence_level2 == "Evidence_ENo", 
+                                   freq, 
+                                   summary_df3 %>% 
+                                     filter(Highest_evidence_level2 == "Evidence_ENo") %>% 
+                                     pull(freq))) %>% 
+  mutate(freq_diff = 100 * freq_diff) %>% 
+  filter(Highest_evidence_level2 != "Evidence_ENo")
+
+summary_df4 %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_highest_evidence_level_v2.csv")
+
+postEP_treatment_detail_count_df_by_evidence %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = Highest_evidence_level2, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  geom_hline(yintercept = as.numeric(summary_df3[summary_df3$Highest_evidence_level2 == "Evidence_ENo","freq"]),
+             linetype = "dashed") +
+  geom_text(aes(x = Highest_evidence_level2, y = 0.24, label =  paste0("(", comma(sum), ")")), size = 3) +
+  geom_text(data = summary_df4,
+            aes(x = Highest_evidence_level2, y = 0.23, label = paste0(sprintf("%.2f", freq_diff), "%")), size = 3) +
+  theme(axis.title.x = element_blank()) +
+  ylab("Fraction of samples") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.25)) +
+  x90 +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_highest_evidence_level_v2.pdf", width = 7.5)
+```
+
+```{r year rough}
+# year (rough)
+postEP_treatment_rough_count_df_by_year <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>%
+  mutate(year = year(Registration_date)) %>% 
+  mutate(year = factor(year)) %>% 
+  group_by(year) %>% 
+  count(PostEP_treatment_policy_name_estimated_rough) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_rough_count_df_by_year)
+postEP_treatment_rough_count_df_by_year %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_year.csv")
+
+tmp_bsc_df <- postEP_treatment_rough_count_df_by_year %>% 
+  filter(PostEP_treatment_policy_name_estimated_rough == "BSC")
+tmp_bsc_df
+prop.trend.test(tmp_bsc_df$n, tmp_bsc_df$sum)
+cocran_armitage_trend_test_manual(tmp_bsc_df$n, tmp_bsc_df$sum)
+
+ggplot(postEP_treatment_rough_count_df_by_year) +
+  geom_bar(aes(x = year, y = freq, fill = PostEP_treatment_policy_name_estimated_rough), color = "black", stat = "identity") +
+  geom_text(aes(x = year, y = 1.025, label =  paste0("(", comma(sum), ")")), size = 3) +
+  xlab("Year of CGP") +
+  ylab("Fraction of samples") +
+  ysum +
+  scale_fill_manual(values = c("#BFBEC5", "lightpink")) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_year.pdf")
+```
+
+```{r year detail}
+# year (detailed)
+postEP_treatment_detail_count_df_by_year <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  mutate(year = year(Registration_date)) %>% 
+  mutate(year = factor(year)) %>% 
+  group_by(year) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_detail_count_df_by_year)
+postEP_treatment_detail_count_df_by_year %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_year.csv")
+
+tmp_chemo_df <- postEP_treatment_detail_count_df_by_year %>%
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy")
+prop.trend.test(tmp_chemo_df$n, tmp_chemo_df$sum)
+cocran_armitage_trend_test_manual(tmp_chemo_df$n, tmp_chemo_df$sum)
+
+postEP_treatment_detail_count_df_by_year %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = year, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  geom_text(aes(x = year, y = 0.24, label =  paste0("(", comma(sum), ")")), size = 3) +
+  xlab("Year of CGP") +
+  ylab("Fraction of samples") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.25)) +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_year.pdf")
+```
+
+```{r year detail adjustment}
+highest_evidence_level_in2020 <- merged_data %>% 
+  mutate(year = year(Registration_date)) %>%
+  filter(year == 2020) %>% 
+  count(Highest_evidence_level) %>% 
+  rename(sum_to_adjust = n)
+highest_evidence_level_in2020
+
+treatment_by_year_level_df <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  mutate(year = year(Registration_date)) %>% 
+  mutate(year = factor(year)) %>% 
+  group_by(year, Highest_evidence_level) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(treatment_by_year_level_df)
+
+output_df <- list()
+for (k in c(2019, 2020, 2021, 2022, 2023, 2024)) {
+  tmp <- treatment_by_year_level_df %>% 
+    filter(year == k) %>% 
+    left_join2(highest_evidence_level_in2020) %>% 
+    mutate(adjusted_n = freq * sum_to_adjust) %>% 
+    ungroup() %>% 
+    select(PostEP_treatment_policy_name_estimated_detail, adjusted_n, year) %>% 
+    group_by(PostEP_treatment_policy_name_estimated_detail, year) %>%
+    summarise(sum = sum(adjusted_n))
+  output_df[[k]] <- tmp
+}
+output_df <- bind_rows(output_df)
+output_df <- output_df %>% 
+  group_by(year) %>% 
+  mutate(freq = sum / sum(sum),
+         sumsum = sum(sum))
+output_df
+
+output_df %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = year, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  geom_text(aes(x = year, y = 0.24, label =  paste("(", comma(sumsum), ")")), size = 3) +
+  xlab("Year of CGP") +
+  ylab("Fraction of samples") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.25)) +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE))
+```
+
+```{r age category rough}
+# PostEP treatment policy by age category (rough)
+# age -64, 65-74, 75-
+postEP_treatment_rough_count_df_by_age <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>%
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>%
+  mutate(Age_category = case_when(Age < 65 ~ "<65",
+                                  Age >= 65 & Age < 75 ~ "65-74",
+                                  Age >= 75 ~ ">=75")) %>%
+  mutate(Age_category = factor(Age_category, levels = c("<65", "65-74", ">=75"))) %>%
+  group_by(Age_category) %>%
+  count(PostEP_treatment_policy_name_estimated_rough) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) 
+print(postEP_treatment_rough_count_df_by_age)
+postEP_treatment_rough_count_df_by_age %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_age_category.csv")
+
+# statistics
+stat1 <- postEP_treatment_rough_count_df_by_age %>% 
+  filter(Age_category %in% c("<65", "65-74")) %>% 
+  pull(n) %>% 
+  matrix(nrow = 2) %>% 
+  chisq.test()
+stat2 <- postEP_treatment_rough_count_df_by_age %>% 
+  filter(Age_category %in% c("65-74", ">=75")) %>%  
+  pull(n) %>% 
+  matrix(nrow = 2) %>% 
+  chisq.test()
+stat3 <- postEP_treatment_rough_count_df_by_age %>% 
+  filter(Age_category %in% c("<65", ">=75")) %>%   
+  pull(n) %>% 
+  matrix(nrow = 2) %>% 
+  chisq.test()
+
+ggplot(postEP_treatment_rough_count_df_by_age) +
+  geom_bar(aes(x = Age_category, y = freq, fill = PostEP_treatment_policy_name_estimated_rough), color = "black", stat = "identity") +
+  geom_text(aes(x = Age_category, y = 1.025, label =  paste0("(", comma(sum), ")")), size = 3) +
+  xlab("Age at CGP") +
+  ylab("Fraction of samples") +
+  ysum +
+  scale_fill_manual(values = c("#BFBEC5", "lightpink")) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  labs(caption = paste("Age",
+                       "<65 vs 65-74 P=", format(stat1$p.value, digits = 5), "\n",
+                       "65-74 vs >=75 P=", format(stat2$p.value, digits = 5), "\n",
+                       "<65 vs >=75 P=", format(stat3$p.value, digits = 5)))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_age_category.pdf")
+```
+
+```{r age category detail}
+postEP_treatment_detail_count_df_by_age <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>%
+  mutate(Age_category = case_when(Age < 65 ~ "<65",
+                                  Age >= 65 & Age < 75 ~ "65-74",
+                                  Age >= 75 ~ ">=75")) %>%
+  mutate(Age_category = factor(Age_category, levels = c("<65", "65-74", ">=75"))) %>%
+  group_by(Age_category) %>%
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_detail_count_df_by_age)
+postEP_treatment_detail_count_df_by_age %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_age_category.csv")
+
+# statistics
+k <- postEP_treatment_detail_count_df_by_age %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  filter(Age_category %in% c("<65", "65-74")) %>% 
+  pull(n)
+k2 <- postEP_treatment_detail_count_df_by_age %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  filter(Age_category %in% c("<65", "65-74")) %>%
+  mutate(n2 = sum -n) %>%
+  pull(n2)
+stat1 <- matrix(c(k, k2), nrow = 2) %>%
+  chisq.test()
+
+k <- postEP_treatment_detail_count_df_by_age %>%
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  filter(Age_category %in% c("65-74", ">=75")) %>%
+  pull(n)
+k2 <- postEP_treatment_detail_count_df_by_age %>%
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  filter(Age_category %in% c("65-74", ">=75")) %>%
+  mutate(n2 = sum -n) %>%
+  pull(n2)
+stat2 <- matrix(c(k, k2), nrow = 2) %>%
+  chisq.test()
+
+k <- postEP_treatment_detail_count_df_by_age %>%
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  filter(Age_category %in% c("<65", ">=75")) %>%
+  pull(n)
+k2 <- postEP_treatment_detail_count_df_by_age %>%
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>%
+  filter(Age_category %in% c("<65", ">=75")) %>%
+  mutate(n2 = sum -n) %>%
+  pull(n2)
+stat3 <- matrix(c(k, k2), nrow = 2) %>%
+  chisq.test()
+
+postEP_treatment_detail_count_df_by_age %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = Age_category, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  geom_hline(yintercept = as.numeric(summary_df3[summary_df3$Highest_evidence_level2 == "Evidence_ENo","freq"]), linetype = "dashed") +
+  geom_text(aes(x = Age_category, y = 0.24, label =  paste0("(", comma(sum), ")")), size = 3) +
+  xlab("Age at CGP") +
+  ylab("Fraction of samples") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.25)) +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  labs(caption = paste("Age",
+                       "<65 vs 65-74 P=", format(stat1$p.value, digits = 5), "\n",
+                       "65-74 vs >=75 P=", format(stat2$p.value, digits = 5), "\n",
+                       "<65 vs >=75 P=", format(stat3$p.value, digits = 5)))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_age_category.pdf")
+```
+
+```{r PS rough}
+# ECOG 0-1, 2-
+postEP_treatment_rough_count_df_by_PS <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>%
+  filter(!is.na(PS) & PS != 9) %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>%
+  mutate(PS_category = case_when(PS %in% c(0, 1) ~ "0-1",
+                                 PS %in% c(2, 3, 4) ~ "2-")) %>%
+  group_by(PS_category) %>% 
+  count(PostEP_treatment_policy_name_estimated_rough) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_rough_count_df_by_PS)
+postEP_treatment_rough_count_df_by_PS %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_PS.csv")
+
+# statistics
+stat1 <- matrix(c(postEP_treatment_rough_count_df_by_PS$n), nrow = 2) %>%
+  chisq.test()
+
+ggplot(postEP_treatment_rough_count_df_by_PS) +
+  geom_bar(aes(x = PS_category, y = freq, fill = PostEP_treatment_policy_name_estimated_rough), color = "black", stat = "identity") +
+  geom_text(aes(x = PS_category, y = 1.025, label =  paste0("(", comma(sum), ")")), size = 3) +
+  xlab("ECOG PS") +
+  ylab("Fraction of samples") +
+  ysum +
+  scale_fill_manual(values = c("#BFBEC5", "lightpink")) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  labs(caption = paste("ECOG PS",
+                       "0-1 vs 2- P=", format(stat1$p.value, digits = 5)))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_PS.pdf")
+```
+
+```{r PS detail}
+postEP_treatment_detail_count_df_by_PS <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  filter(!is.na(PS) & PS != 9) %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>%
+  mutate(PS_category = case_when(PS %in% c(0, 1) ~ "0-1",
+                                 PS %in% c(2, 3, 4) ~ "2-")) %>%
+  group_by(PS_category) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_detail_count_df_by_PS)
+postEP_treatment_detail_count_df_by_PS %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_PS.csv")
+
+# statistics
+k <- postEP_treatment_detail_count_df_by_PS %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  pull(n)
+k2 <- postEP_treatment_detail_count_df_by_PS %>%
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  mutate(n2 = sum -n) %>% 
+  pull(n2)
+stat1 <- matrix(c(k, k2), nrow = 2) %>%
+  chisq.test()
+
+postEP_treatment_detail_count_df_by_PS %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = PS_category, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  geom_text(aes(x = PS_category, y = 0.24, label =  paste0("(", comma(sum), ")")), size = 3) +
+  geom_hline(yintercept = as.numeric(summary_df3[summary_df3$Highest_evidence_level2 == "Evidence_ENo","freq"]), linetype = "dashed") +
+  xlab("ECOG PS") +
+  ylab("Fraction of samples") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.25)) +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  labs(caption = paste("ECOG PS",
+                       "0-1 vs 2- P=", format(stat1$p.value, digits = 5)))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_PS.pdf")
+```
+
+```{r preparation for double cancer}
+# list up organ names
+organ_names <- list.files("../../../sh_c-cat_analysis/data/ccat/ver20240621/F1CDx/",
+                          full.names = FALSE)
+organ_names[1:3]
+
+# colnames reference
+report_colnames_df <- read_xlsx("../../ref/colnames_ver202406.xlsx", "case") %>% 
+  filter(Double_multiple_columns == "TRUE")
+head(report_colnames_df)
+
+report_cols <- report_colnames_df
+report_cols["coltypes"][report_cols["coltypes"] == "character"] <- "c"
+report_cols["coltypes"][report_cols["coltypes"] == "numeric"] <- "n"
+report_cols["coltypes"][report_cols["coltypes"] == "logical"] <- "l"
+report_cols["coltypes"][report_cols["coltypes"] == "date"] <- "D"
+report_cols_collapsed <- paste(report_cols$coltypes, collapse = "")
+```
+
+```{r double cancer, warning=FALSE, message=FALSE}
+multiple_data <- list()
+for (organ in organ_names){
+  # read in actionability files
+  organ_multiple_data <- read_csv(paste0("result/table/prep/case/", organ, "/double_multiple_data.csv"),
+                                       col_types = report_cols_collapsed)
+  
+  multiple_data[[organ]] <- organ_multiple_data
+}
+multiple_data <- bind_rows(multiple_data) 
+
+multiple_data %>% 
+  count(Double_cancer, Double_cancer_name, Double_cancer_activity, Double_cancer_activity_name)
+
+multiple_data <- multiple_data %>% 
+  select(Tumor_Sample_Barcode, Double_cancer_name, Double_cancer_activity_name) %>% 
+  unique()
+multiple_data
+
+Double_cancer_data <- multiple_data %>% 
+  filter(Double_cancer_name %in% c("Yes", "None")) %>% 
+  select(Tumor_Sample_Barcode, Double_cancer_name) %>%
+  unique()
+
+# check
+tmp <- Double_cancer_data %>% 
+  count(Tumor_Sample_Barcode) %>% 
+  filter(n >= 2)
+if (nrow(tmp) > 0){
+  stop("something wrong")
+}
+
+Double_cancer_activity_data <- multiple_data %>% 
+  filter(!is.na(Double_cancer_name)) %>% 
+  mutate(Double_cancer_activity_name = paste(Double_cancer_name, Double_cancer_activity_name, sep = "_")) %>% 
+  select(Tumor_Sample_Barcode, Double_cancer_activity_name) %>%
+  # Tumor_Sample_Barcode
+  unique()
+Double_cancer_activity_data
+
+merged_data2 <- merged_data %>% 
+  left_join2(Double_cancer_data)
+```
+
+```{r double cancer rough}
+# PostEP treatment policy by double cancer
+postEP_treatment_rough_count_df_by_doublecancer <- merged_data2 %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>%
+  filter(!is.na(Double_cancer_name)) %>%
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>%
+  group_by(Double_cancer_name) %>% 
+  count(PostEP_treatment_policy_name_estimated_rough) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_rough_count_df_by_doublecancer)
+postEP_treatment_rough_count_df_by_doublecancer %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_double_cancer.csv")
+
+# statistics
+stat1 <- matrix(c(postEP_treatment_rough_count_df_by_doublecancer$n), nrow = 2) %>%
+  chisq.test()
+
+ggplot(postEP_treatment_rough_count_df_by_doublecancer) +
+  geom_bar(aes(x = Double_cancer_name, y = freq, fill = PostEP_treatment_policy_name_estimated_rough), color = "black", stat = "identity") +
+  geom_text(aes(x = Double_cancer_name, y = 1.025, label =  paste0("(", comma(sum), ")")), size = 3) +
+  xlab("Double cancer") +
+  ylab("Fraction of samples") +
+  ysum +
+  scale_fill_manual(values = c("#BFBEC5", "lightpink")) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  labs(caption = paste("Double cancer",
+                       "Yes vs None P=", format(stat1$p.value, digits = 5)))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_double_cancer.pdf")
+```
+
+```{r double cancer detail}
+# PostEP treatment policy by double cancer activity
+postEP_treatment_detail_count_df_by_doublecancer <- merged_data2 %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  filter(!is.na(Double_cancer_name)) %>%
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>%
+  group_by(Double_cancer_name) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+print(postEP_treatment_detail_count_df_by_doublecancer)
+postEP_treatment_detail_count_df_by_doublecancer %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_double_cancer.csv")
+
+# statistics
+k <- postEP_treatment_detail_count_df_by_doublecancer %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  pull(n)
+k2 <- postEP_treatment_detail_count_df_by_doublecancer %>%
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  mutate(n2 = sum -n) %>% 
+  pull(n2)
+stat1 <- matrix(c(k, k2), nrow = 2) %>%
+  chisq.test()
+
+postEP_treatment_detail_count_df_by_doublecancer %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = Double_cancer_name, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  geom_text(aes(x = Double_cancer_name, y = 0.24, label =  paste0("(", comma(sum), ")")), size = 3) +
+  geom_hline(yintercept = as.numeric(summary_df3[summary_df3$Highest_evidence_level2 == "Evidence_ENo","freq"]), linetype = "dashed") +
+  xlab("Double cancer") +
+  ylab("Fraction of samples") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.25)) +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  labs(caption = paste("Double cancer",
+                       "Yes vs None P=", format(stat1$p.value, digits = 5)))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_double_cancer.pdf")
+```
+
+```{r clinical trial reachability rough}
+# PostEP treatment policy by clinical trial reachability
+postEP_treatment_rough_count_df_by_reachability <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>%
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>% 
+  unite(col = "EvidenceAunnaprovedBCD_reachability", Evidence_A_reachability, Evidence_B_reachability, Evidence_C_reachability, Evidence_D_reachability) %>% 
+  mutate(Reachability = if_else(str_detect(EvidenceAunnaprovedBCD_reachability, "domestic_clinical_trial"),
+                                "Available",
+                                "Unavailable")) %>% 
+  group_by(Reachability) %>% 
+  count(PostEP_treatment_policy_name_estimated_rough) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+postEP_treatment_rough_count_df_by_reachability
+postEP_treatment_rough_count_df_by_reachability %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_reachability.csv")
+
+# statistics
+stat1 <- matrix(postEP_treatment_rough_count_df_by_reachability$n, nrow = 2) %>%
+  chisq.test()
+
+ggplot(postEP_treatment_rough_count_df_by_reachability) +
+  geom_bar(aes(x = Reachability, y = freq, fill = PostEP_treatment_policy_name_estimated_rough), color = "black", stat = "identity") +
+  geom_text(aes(x = Reachability, y = 1.025, label =  paste0("(", comma(sum), ")")), size = 3) +
+  xlab("Clinical trial availability in Japan (at the time of CGP)") +
+  ylab("Fraction of samples") +
+  ysum +
+  scale_fill_manual(values = c("#BFBEC5", "lightpink")) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  labs(caption = paste("Available vs Unavailable P=", format(stat1$p.value, digits = 5)))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_reachability.pdf")
+```
+
+```{r clinical trial reachability detail}
+# PostEP treatment policy by clinical trial reachability
+postEP_treatment_detail_count_df_by_reachability <- merged_data %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>% 
+  unite(col = "EvidenceAunnaprovedBCD_reachability", Evidence_A_reachability, Evidence_B_reachability, Evidence_C_reachability, Evidence_D_reachability) %>% 
+  mutate(Reachability = if_else(str_detect(EvidenceAunnaprovedBCD_reachability, "domestic_clinical_trial"),
+                                "Available",
+                                "Unavailable")) %>% 
+  group_by(Reachability) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n))
+postEP_treatment_detail_count_df_by_reachability
+postEP_treatment_detail_count_df_by_reachability %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_reachability.csv")
+
+# statistics
+k <- postEP_treatment_detail_count_df_by_reachability %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>%
+  pull(n)
+k2 <- postEP_treatment_detail_count_df_by_reachability %>%
+  filter(PostEP_treatment_policy_name_estimated_detail == "Chemotherapy") %>% 
+  mutate(n2 = sum -n) %>%
+  pull(n2)
+stat1 <- matrix(c(k, k2), nrow = 2) %>%
+  chisq.test()
+
+postEP_treatment_detail_count_df_by_reachability %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = Reachability, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  geom_text(aes(x = Reachability, y = 0.24, label =  paste0("(", comma(sum), ")")), size = 3) +
+  geom_hline(yintercept = as.numeric(summary_df3[summary_df3$Highest_evidence_level2 == "Evidence_ENo","freq"]), linetype = "dashed") +
+  xlab("Clinical trial availability in Japan (at the time of CGP)") +
+  ylab("Fraction of samples") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.25)) +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE)) +
+  labs(caption = paste("Available vs Unavailable P=", format(stat1$p.value, digits = 5)))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_reachability.pdf")
+```
+
+```{r cancer type rough}
+source("../../R/cancer_type_order_v4.R")
+
+#  Oncotree_CODE_Final_wide
+postEP_treatment_rough_count_df_by_cancertype <- merged_data %>% 
+  filter(Oncotree_CODE_Final_wide %in% wide_cancer_order) %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>%
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>% 
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  count(PostEP_treatment_policy_name_estimated_rough) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = wide_cancer_order)) %>% 
+  arrange(Oncotree_CODE_Final_wide)
+print(postEP_treatment_rough_count_df_by_cancertype)
+postEP_treatment_rough_count_df_by_cancertype %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_cancer_type.csv")
+
+postEP_treatment_rough_count_df_by_cancertype %>% 
+  filter(sum >= 10) %>% 
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = freq, fill = PostEP_treatment_policy_name_estimated_rough), color = "black", stat = "identity") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 1.025, label =  paste0("(", comma(sum), ")")), size = 3) +
+  theme(axis.title.x = element_blank()) +
+  ylab("Fraction of samples") +
+  x90 +
+  ysum +
+  scale_fill_manual(values = c("#BFBEC5", "lightpink")) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_cancer_type.pdf", width = 10, height = 5)
+```
+
+```{r cancer type detail}
+#  Oncotree_CODE_Final_wide
+postEP_treatment_detail_count_df_by_cancertype <- merged_data %>% 
+  filter(Oncotree_CODE_Final_wide %in% wide_cancer_order) %>%
+  filter(!is.na(PostEP_treatment_policy_name_estimated_detail)) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "BSC") %>% 
+  filter(Highest_evidence_level2 %in% c("Evidence_A(unapproved)", "Evidence_B", "Evidence_C", "Evidence_D")) %>% 
+  group_by(Oncotree_CODE_Final_wide) %>% 
+  count(PostEP_treatment_policy_name_estimated_detail) %>%
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide, levels = wide_cancer_order)) %>% 
+  arrange(Oncotree_CODE_Final_wide)
+print(postEP_treatment_detail_count_df_by_cancertype)
+postEP_treatment_detail_count_df_by_cancertype %>% 
+  write_excel_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_cancer_type.csv")
+
+postEP_treatment_detail_count_df_by_cancertype %>%
+  filter(sum >= 10) %>%
+  filter(PostEP_treatment_policy_name_estimated_detail != "Chemotherapy") %>% 
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = freq, fill = PostEP_treatment_policy_name_estimated_detail), color = "black", stat = "identity") +
+  geom_text(aes(x = Oncotree_CODE_Final_wide, y = 0.48, label =  paste0("(", comma(sum), ")")), size = 3) +
+  theme(axis.title.x = element_blank()) +
+  ylab("Fraction of samples") +
+  x90 +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.5)) +
+  scale_fill_manual(values = c(ggColorHue(6)[5], ggColorHue(6)[1])) +
+  guides(fill = guide_legend(title = "Treatment policy",
+                             reverse = TRUE))
+ggsave("result/pdf/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_cancer_type.pdf", width = 13, height = 5)
+```
+
+```{r sessioninfo}
+sessionInfo()
+```

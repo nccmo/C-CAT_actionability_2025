@@ -1,0 +1,192 @@
+---
+title: "CGP_utility_by_cancer_type"
+author: "Yuki Saito"
+date: "2024-07-30"
+output: html_document
+---
+
+- R markdown script to evaluate the fraction of cases estimated to benefit from CGP by tumor type.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+source("../../R/cancer_type_order_v4.R")
+```
+
+```{r read data}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "")
+# read in evidence A treatment data
+evidenceA_treatment_data <- read_csv("result/table/evidence_A/Evidence_A_data_by_alteration_with_treatment_and_response.csv", na = "")
+```
+
+```{r frequency by evidence level}
+evidence_count_df <- read_csv("result/table/analysis/treatment_overview/highest_evidence_level_fraction_by_cancertype.csv") %>% 
+  select(-sum, -freq) %>% 
+  pivot_wider(names_from = Highest_evidence_level2, values_from = n) %>% 
+  nazero() %>%
+  select(Oncotree_CODE_Final_wide, `Evidence_A(approved)`, `Evidence_A(unapproved)`, Evidence_B, Evidence_C, Evidence_D, Evidence_E, No_evidence) %>% 
+  rename(Aapproved_num = `Evidence_A(approved)`,
+         Aunapproved_num = `Evidence_A(unapproved)`,
+         B_num = Evidence_B,
+         C_num = Evidence_C,
+         D_num = Evidence_D,
+         E_num = Evidence_E,
+         No_num = No_evidence) %>% 
+  mutate(Sum = Aapproved_num + Aunapproved_num + B_num + C_num + D_num + E_num + No_num) 
+evidence_count_df
+```
+
+```{r non-BSC freq in each evidence level}
+treatment_rough_df <- merged_data %>%
+  filter(Pre_regimen_info_existence == "Yes") %>% 
+  filter(!is.na(PostEP_treatment_policy_name_estimated_rough)) %>%
+  count(Oncotree_CODE_Final_wide, Highest_evidence_level2, PostEP_treatment_policy_name_estimated_rough) %>% 
+  complete(Oncotree_CODE_Final_wide, Highest_evidence_level2, PostEP_treatment_policy_name_estimated_rough, fill = list(n = 0)) %>% 
+  group_by(Oncotree_CODE_Final_wide, Highest_evidence_level2) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  filter(PostEP_treatment_policy_name_estimated_rough == "Chemotherapy")
+
+treatment_rough_df2 <- treatment_rough_df %>% 
+  select(-n, -sum, -PostEP_treatment_policy_name_estimated_rough) %>% 
+  pivot_wider(names_from = Highest_evidence_level2, values_from = freq) %>% 
+  rename(Aapproved_nonBSC_freq = `Evidence_A(approved)`,
+         Aunapproved_nonBSC_freq = `Evidence_A(unapproved)`,
+         B_nonBSC_freq = Evidence_B,
+         C_nonBSC_freq = Evidence_C,
+         D_nonBSC_freq = Evidence_D,
+         E_nonBSC_freq = Evidence_E,
+         No_nonBSC_freq = No_evidence)
+```
+
+```{r off-label freq in each evidence level}
+evidence_treatment_df <- read_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_highest_evidence_level_and_cancer_type.csv") %>% 
+  filter(PostEP_treatment_policy_name_estimated_detail == "Off-label") %>% 
+  mutate(freq = n / sum) %>% 
+  filter(Highest_evidence_level2 != "Evidence_A(approved)") %>% 
+  select(Oncotree_CODE_Final_wide, Highest_evidence_level2, freq) %>% 
+  pivot_wider(names_from = Highest_evidence_level2, values_from = freq) %>% 
+  mutate(Aunapproved_diff_freq = `Evidence_A(unapproved)`- NoE,
+         B_diff_freq = Evidence_B - NoE,
+         C_diff_freq = Evidence_C - NoE,
+         D_diff_freq = Evidence_D - NoE) %>% 
+  select(Oncotree_CODE_Final_wide, Aunapproved_diff_freq, B_diff_freq, C_diff_freq, D_diff_freq)
+evidence_treatment_df
+```
+
+```{r new administration in evidence A}
+evidenceA_treatment_df <- read_csv("result/table/analysis/evidence_A/Evidence_A(approved)_treatment_summary_by_cancer_type.csv") %>% 
+  filter(PostCGP_Treatment == "Newly_administered") %>% 
+  select(Oncotree_CODE_Final_wide, freq) %>% 
+  rename(Aapproved_new_freq = freq)
+evidenceA_treatment_df
+```
+
+```{r calculation}
+final_df <- evidence_count_df %>% 
+  left_join2(treatment_rough_df2) %>%
+  left_join2(evidence_treatment_df) %>%
+  left_join2(evidenceA_treatment_df) 
+
+final_df <- final_df %>% 
+  mutate(Evidence_A_approved_effective_freq = (Aapproved_num/Sum) * Aapproved_nonBSC_freq * Aapproved_new_freq,
+         Evidence_A_unapproved_effective_freq = (Aunapproved_num/Sum) * Aunapproved_nonBSC_freq * Aunapproved_diff_freq,
+         Evidence_B_effective_freq = (B_num/Sum) * B_nonBSC_freq * B_diff_freq,
+         Evidence_C_effective_freq = (C_num/Sum) * C_nonBSC_freq * C_diff_freq,
+         Evidence_D_effective_freq = (D_num/Sum) * D_nonBSC_freq * D_diff_freq)
+final_df
+```
+
+```{r modify}
+final_df2 <- final_df %>%
+  replace_na(list(Evidence_A_approved_effective_freq = 0)) %>%
+  replace_na(list(Evidence_A_unapproved_effective_freq = 0)) %>% 
+  replace_na(list(Evidence_B_effective_freq = 0)) %>%
+  replace_na(list(Evidence_C_effective_freq = 0)) %>%
+  replace_na(list(Evidence_D_effective_freq = 0)) %>%
+  mutate(Evidence_A_approved_effective_freq = if_else(Evidence_A_approved_effective_freq < 0, 0, Evidence_A_approved_effective_freq)) %>%
+  mutate(Evidence_A_unapproved_effective_freq = if_else(Evidence_A_unapproved_effective_freq < 0, 0, Evidence_A_unapproved_effective_freq)) %>%
+  mutate(Evidence_B_effective_freq = if_else(Evidence_B_effective_freq < 0, 0, Evidence_B_effective_freq)) %>%
+  mutate(Evidence_C_effective_freq = if_else(Evidence_C_effective_freq < 0, 0, Evidence_C_effective_freq)) %>%
+  mutate(Evidence_D_effective_freq = if_else(Evidence_D_effective_freq < 0, 0, Evidence_D_effective_freq)) %>% 
+  mutate(Effective_freq = Evidence_A_approved_effective_freq + 
+           Evidence_A_unapproved_effective_freq + 
+           Evidence_B_effective_freq + 
+           Evidence_C_effective_freq + 
+           Evidence_D_effective_freq)
+final_df2
+```
+
+```{r figure}
+fig <- final_df2 %>% 
+  select(Oncotree_CODE_Final_wide, 
+         Evidence_A_approved_effective_freq, 
+         Evidence_A_unapproved_effective_freq,
+         Evidence_B_effective_freq,
+         Evidence_C_effective_freq,
+         Evidence_D_effective_freq) %>%
+  pivot_longer(cols = c(Evidence_A_approved_effective_freq,
+                        Evidence_A_unapproved_effective_freq,
+                        Evidence_B_effective_freq,
+                        Evidence_C_effective_freq,
+                        Evidence_D_effective_freq),
+               names_to = "class", values_to = "freq") %>% 
+  mutate(class = factor(class, 
+                        levels = c("Evidence_D_effective_freq",
+                                   "Evidence_C_effective_freq",
+                                   "Evidence_B_effective_freq",
+                                   "Evidence_A_unapproved_effective_freq",
+                                   "Evidence_A_approved_effective_freq"))) %>% 
+  mutate(Oncotree_CODE_Final_wide = factor(Oncotree_CODE_Final_wide,
+                                           levels = wide_cancer_order)) %>% 
+  mutate(freq = if_else(freq < 0, 0, freq)) %>% 
+  ggplot() +
+  geom_bar(aes(x = Oncotree_CODE_Final_wide, y = freq, fill = class), color = "black", stat = "identity") +
+  x90 +
+  scale_fill_manual(name = "Highest evidence level",
+                    values = c(
+                      "Evidence_D_effective_freq" = "#3C5488FF",
+                      "Evidence_C_effective_freq" = "#4DBBD5FF",
+                      "Evidence_B_effective_freq" = "#00A087FF",
+                      "Evidence_A_unapproved_effective_freq" = "pink",
+                      "Evidence_A_approved_effective_freq" = "#E64B35FF"
+                    )) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 0.35)) +
+  ylab("Fraction of cases") +
+  theme(axis.title.x = element_blank())
+
+fig
+ggsave("result/pdf/analysis/evidence_A/estimation_of_effective_case_frequency_by_cancer_type_calc1.pdf")
+fig + theme(legend.position = "none")
+ggsave("result/pdf/analysis/evidence_A/estimation_of_effective_case_frequency_by_cancer_type_no_legend_calc1.pdf")
+```
+
+```{r save}
+final_df3 <- final_df2 %>% 
+  select(Oncotree_CODE_Final_wide, Effective_freq)
+
+final_df %>% 
+  left_join2(final_df3) %>% 
+  write_excel_csv("result/table/analysis/evidence_A/estimation_of_effective_case_frequency_by_cancer_type_calc1.csv")
+```
+
+```{r sessionInfo}
+sessionInfo()
+```
+

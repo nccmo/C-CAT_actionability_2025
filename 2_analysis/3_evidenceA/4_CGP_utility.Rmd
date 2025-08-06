@@ -1,0 +1,158 @@
+---
+title: "CGP_utility"
+author: "Yuki Saito"
+date: "2024-07-30"
+output: html_document
+---
+
+- R markdown script to evaluate the fraction of cases estimated to benefit from CGP.
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(cowplot)
+theme_set(theme_cowplot())
+```
+
+```{r source}
+source("../../R/utils.R")
+source("../../R/figure.R")
+```
+
+```{r make directory}
+# make directory
+dir.create("result/table/analysis/evidence_A/", showWarnings = FALSE, recursive = TRUE)
+dir.create("result/pdf/analysis/evidence_A/", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r read in data}
+# read in merged data
+merged_data <- read_csv("result/table/merged/merged_patient_data10.csv", na = "") %>% 
+  mutate(Highest_evidence_level2 = factor(Highest_evidence_level2,
+                                        levels = c("Evidence_A(approved)",
+                                                   "Evidence_A(unapproved)",
+                                                   "Evidence_B",
+                                                   "Evidence_C",
+                                                   "Evidence_D",
+                                                   "Evidence_E",
+                                                   "No_evidence")))
+# read in evidence A treatment data
+evidenceA_treatment_data <- read_csv("result/table/evidence_A/Evidence_A_data_by_alteration_with_treatment_and_response.csv", na = "")
+```
+
+```{r evidence a separation}
+# all
+evidence_count_df <- merged_data %>%
+  count(Highest_evidence_level2) %>% 
+  mutate(freq = n / sum(n),
+         sum = sum(n)) %>% 
+  mutate(class = "All")
+print(evidence_count_df)
+```
+
+```{r read in data2}
+treatment_rough_df <- read_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_rough_by_highest_evidence_level.csv") %>% 
+  filter(PostEP_treatment_policy_name_estimated_rough == "Chemotherapy")
+treatment_rough_df
+
+evidence_treatment_df <- read_csv("result/table/analysis/treatment_overview/postEP_treatment_policy_estimated_detail_by_highest_evidence_level_v2.csv")
+evidence_treatment_df
+
+evidenceA_treatment_df <- read_csv("result/table/analysis/evidence_A/Evidence_A(approved)_treatment_summary.csv")
+evidenceA_treatment_df
+```
+
+```{r calculation}
+# Evidence A
+6043/54185 * 2066/2355 * 974/1558
+evidence_count_df[[1, "freq"]] * treatment_rough_df[[1, "freq"]] * evidenceA_treatment_df[[1, "freq"]]
+
+# Evidence A (unapproved)
+2951/54185 * 906/1090 * (151/906 - (201+91)/(1865+698))
+evidence_count_df[[2, "freq"]] * treatment_rough_df[[2, "freq"]] * evidence_treatment_df[[2, "freq_diff"]]/100
+  
+# Evidence B
+4378/54185 * 1029/1282 * (159/1029 - (201+91)/(1865+698))
+evidence_count_df[[3, "freq"]] * treatment_rough_df[[3, "freq"]] * evidence_treatment_df[[3, "freq_diff"]]/100
+
+# Evidence C
+25681/54185 * 5468/7418 * (833/5468 - (201+91)/(1865+698))
+evidence_count_df[[4, "freq"]] * treatment_rough_df[[4, "freq"]] * evidence_treatment_df[[4, "freq_diff"]]/100
+
+# Evidence D
+323/54185 * 58/85 * (11/58 - (201+91)/(1865+698))
+evidence_count_df[[5, "freq"]] * treatment_rough_df[[5, "freq"]] * evidence_treatment_df[[5, "freq_diff"]]/100
+```
+
+```{r summarization}
+treatment_df <- tibble(Highest_evidence_level2 = c("Evidence_A(approved)", 
+                                                   "Evidence_A(unapproved)", 
+                                                   "Evidence_B", 
+                                                   "Evidence_C", 
+                                                   "Evidence_D"),
+                       freq = c(evidence_count_df[[1, "freq"]] * treatment_rough_df[[1, "freq"]] * evidenceA_treatment_df[[1, "freq"]], 
+                                evidence_count_df[[2, "freq"]] * treatment_rough_df[[2, "freq"]] * evidence_treatment_df[[2, "freq_diff"]]/100, 
+                                evidence_count_df[[3, "freq"]] * treatment_rough_df[[3, "freq"]] * evidence_treatment_df[[3, "freq_diff"]]/100, 
+                                evidence_count_df[[4, "freq"]] * treatment_rough_df[[4, "freq"]] * evidence_treatment_df[[4, "freq_diff"]]/100, 
+                                evidence_count_df[[5, "freq"]] * treatment_rough_df[[5, "freq"]] * evidence_treatment_df[[5, "freq_diff"]]/100),
+                       class = "Treatment2")
+treatment_df
+sum(treatment_df$freq)
+
+final_df <- bind_rows(evidence_count_df, treatment_df) %>% 
+  mutate(Highest_evidence_level2 = factor(Highest_evidence_level2,
+                                          levels = c("No_evidence",
+                                                     "Evidence_E",
+                                                     "Evidence_D",
+                                                     "Evidence_C",
+                                                     "Evidence_B",
+                                                     "Evidence_A(unapproved)",
+                                                     "Evidence_A(approved)"
+                                          )))
+```
+
+```{r figure}
+library(ggsci)
+library(RColorBrewer)
+
+final_df %>% 
+  filter(Highest_evidence_level2 != "Evidence_E") %>%
+  filter(Highest_evidence_level2 != "No_evidence") %>%
+  ggplot() +
+  geom_bar(aes(x = class, y = freq, fill = Highest_evidence_level2), color = "black", stat = "identity") +
+  scale_fill_manual(
+    name = "Highest evidence level",
+    values = c(
+      "No_evidence" = "gray60",
+      "Evidence_E" = "#F39B7FFF",
+      "Evidence_D" = "#3C5488FF",
+      "Evidence_C" = "#4DBBD5FF",
+      "Evidence_B" = "#00A087FF",
+      "Evidence_A(unapproved)" = "pink",
+      "Evidence_A(approved)" = "#E64B35FF"
+    )) +
+  labs(x = "Highest evidence level", y = "Frequency") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 1.0)) +
+  ylab("Fraction of samples") +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank()) +
+  guides(fill = guide_legend(reverse = TRUE,
+                             title = "Highest evidence level"))
+ggsave("result/pdf/analysis/evidence_A/estimation_of_effective_case_frequency.pdf")
+
+final_df %>% 
+  write_csv("result/table/analysis/evidence_A/estimation_of_effective_case_frequency.csv")
+```
+
+```{r sessionInfo, echo=FALSE}
+sessionInfo()
+```
+
